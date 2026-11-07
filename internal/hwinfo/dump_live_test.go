@@ -10,9 +10,15 @@ import (
 )
 
 func TestDumpLive(t *testing.T) {
+	// Level marking by level AND capability: reading HWiNFO's shared
+	// sensor dump is live third-party state, so -short keeps it out
+	// even on a machine where HWiNFO is running.
+	if testing.Short() {
+		t.Skip("test level 3 (hardware acceptance): live HWiNFO dump is excluded by -short")
+	}
 	s, err := Open()
 	if err != nil {
-		t.Skipf("no hwinfo: %v", err)
+		t.Skipf("test level 3 (hardware acceptance): no live HWiNFO shared dump on this machine: %v", err)
 	}
 	defer s.Close()
 	header := s.copy(0, hdrMinSize)

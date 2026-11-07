@@ -105,6 +105,13 @@ func requireWMIService(t *testing.T) {
 // helpers, so the plumbing is proven even when no monitor is running.
 // It doubles as a regression net for the vtable slots and GUIDs.
 func TestWMIRawChain(t *testing.T) {
+	// Level marking is by BOTH capability and level: the chain needs
+	// the live WMI service, so -short keeps it out even on a machine
+	// where it would otherwise pass (that is what makes the short gate
+	// hermetic on every machine, not only on machines without WMI).
+	if testing.Short() {
+		t.Skip("test level 2 (Windows integration): raw WMI service chain is excluded by -short")
+	}
 	requireWMIService(t)
 	type result struct {
 		name string
@@ -195,6 +202,9 @@ func TestWMIRawChain(t *testing.T) {
 // CPU sensors must decode end to end. Otherwise skip - absence is a
 // normal machine state, not a failure.
 func TestWMISensorsLive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("test level 3 (hardware acceptance): live sensor provider check is excluded by -short")
+	}
 	s, err := Open()
 	if err != nil {
 		t.Skipf("test level 3 (hardware acceptance): no live LHM/OHM WMI provider on this machine: %v", err)
@@ -218,15 +228,42 @@ func TestWMISensorsLive(t *testing.T) {
 
 // TestRunFlagSelectsWMIGroup proves the documented TestWMI* name prefix
 // partitions the WMI-dependent level (audit A07 mandatory: level marking
-// distinguishable by command line). Re-execing this binary with
-// -test.run=^TestWMI must reach the integration pair and nothing else;
-// the pair itself then behaves by capability as usual. This guard test
-// deliberately does NOT carry the TestWMI prefix - it must stay outside
-// the group it verifies, or the re-exec would recurse forever.
+// distinguishable by command line) - in BOTH directions:
+//   - a full run re-executes with -test.run=^TestWMI and must REACH the
+//     pair (which then behaves by capability as usual);
+//   - a short run re-executes with -test.short too and must SKIP the
+//     pair with its level word, so -short keeps the WMI service
+//     untouched even on a machine where the pair would pass.
+//
+// This guard test deliberately does NOT carry the TestWMI prefix - it
+// must stay outside the group it verifies, or the re-exec would recurse
+// forever.
 func TestRunFlagSelectsWMIGroup(t *testing.T) {
-	cmd := exec.Command(os.Args[0], "-test.run=^TestWMI", "-test.v", "-test.timeout=120s")
+	short := testing.Short()
+	args := []string{"-test.run=^TestWMI", "-test.v", "-test.timeout=120s"}
+	if short {
+		args = append(args, "-test.short")
+	}
+	cmd := exec.Command(os.Args[0], args...)
 	out, err := cmd.CombinedOutput()
 	text := string(out)
+	if err != nil {
+		t.Fatalf("WMI group must pass or skip by capability, got %v:\n%s", err, text)
+	}
+	if strings.Contains(text, "=== RUN   TestVariantFloat") {
+		t.Fatalf("the level name pattern pulled unit tests into the run:\n%s", text)
+	}
+	if short {
+		for _, want := range []string{
+			"--- SKIP: TestWMIRawChain", "test level 2",
+			"--- SKIP: TestWMISensorsLive", "test level 3",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("under -short the WMI pair must skip naming its level, child output lacks %q:\n%s", want, text)
+			}
+		}
+		return
+	}
 	for _, want := range []string{
 		"=== RUN   TestWMIRawChain",
 		"=== RUN   TestWMISensorsLive",
@@ -234,11 +271,5 @@ func TestRunFlagSelectsWMIGroup(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("run=^TestWMI child output lacks %q (err %v):\n%s", want, err, text)
 		}
-	}
-	if strings.Contains(text, "=== RUN   TestVariantFloat") {
-		t.Fatalf("the level name pattern pulled unit tests into the run:\n%s", text)
-	}
-	if err != nil {
-		t.Fatalf("WMI group must pass or skip by capability, got %v:\n%s", err, text)
 	}
 }
