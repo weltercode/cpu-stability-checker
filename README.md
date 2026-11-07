@@ -43,7 +43,9 @@ release. The open gaps are:
 - external adapters point at tools you install yourself: a fresh checkout has no
   `config.json` at all, so every external workload starts out unavailable until
   you register its tool (`tools status`, `tools detect`, or `config init` plus
-  a manual edit). This project never downloads anything for you.
+  a manual edit). Nothing is fetched or installed by itself during a test or a
+  run; `tools install` is a separate, explicit command that downloads the one
+  tool you named from its author's own download page and checks its checksum.
 
 The development journal — roadmap, dated audits, validation protocols, the
 hardware-acceptance records behind the statements below — stays in the author's
@@ -174,7 +176,11 @@ hand (`switch_pairs`) or let the scope fields generate them from the
 detected topology (`switch_scope`: `ccx`/`smt`/`all`, `switch_cores` pool),
 plus `switch_rounds`, `switch_gap` and `switch_run`. Every participant is
 spawned and PREPAREd before the first
-switch, so the measured transition contains no spawn and no allocation; the
+switch, so the measured transition contains no process spawn and no
+memory-engine or workload setup on the measured path; the switch command
+itself still allocates its bookkeeping (a context, channels, goroutines, a
+timer), which is exactly why the journaled per-turn latencies are labeled
+upper bounds rather than exact costs. The
 turn order is fixed or seeded, and the journal keeps the commanded turn
 timeline, the parent's per-turn latencies (labeled upper bounds, IPC round
 trip included) and each member's own view as separate records. The turn gaps
@@ -218,10 +224,18 @@ Process exit codes:
 
 | Code | Meaning |
 |---:|---|
-| `0` | the declared contract completed |
-| `1` | fault, abort, interruption, or incomplete required validation |
+| `0` | the run executed to its declared end, without fault |
+| `1` | fault, abort, or interruption during execution |
 | `2` | invalid configuration or setup/tool failure before a valid run |
 | `130` | forced signal termination path |
+
+Exit code and validation strength are two separate axes, and the table above
+describes only the first. A clean exit `0` can still carry an `UNVERIFIED`
+verdict with `partial` validation: for example, with `parking_policy:
+"required"` and a source that lives but sees no parking, the run completes
+honestly (exit `0`) yet withholds the full verification claim, because the
+required evidence was never observed. Scripts must read the result file's
+verdict and validation fields, not just the exit code.
 
 Important output artifacts include the text log, append-only JSONL journal,
 saved request/session manifest, and final result. Reports must preserve partial
@@ -246,8 +260,20 @@ visible, not silent: `tools status` marks the entry `MISSING` and names it, and
 every entry point (the menu, repeats, scripted runs) refuses a missing
 registered tool before any load starts, naming the path and exiting 2.
 `config init` writes a portable sample that bakes in no machine-specific paths
-at all; `tools detect` fills in what it can find on your machine. Repointing or
-removing entries is the operator's call, not the tool's.
+at all, and it refuses to overwrite an existing `config.json` unless you pass
+`-force` — an operator's core selectors, durations, memory budget and
+registered tools are never silently replaced; `tools detect` fills in what it
+can find on your machine. Repointing or removing entries is the operator's
+call, not the tool's.
+
+Nothing is downloaded while a test or a run is executing. Fetching a tool is
+always a separate explicit act: `tools install <name>` takes the pinned archive
+from that tool's own download page (Prime95 from mersenne.org, y-cruncher and
+`ryzen-smu-cli` from their GitHub release pages), verifies the pinned SHA-256
+and unpacks it where you point it. Each external tool keeps its own license -
+Prime95 and y-cruncher are freeware, `ryzen-smu-cli` is GPL-3.0 - and the
+public-domain dedication of this project covers only this program and its
+sources, never the tools you register.
 
 ## Development checks
 
