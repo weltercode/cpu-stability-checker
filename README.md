@@ -75,6 +75,12 @@ go build -o cpu-stability.exe .
 .\cpu-stability.exe
 ```
 
+The module is public, so an installed tool is one command away:
+`go install github.com/weltercode/cpu-stability-checker@latest` builds the
+currently published tag. That binary is named `cpu-stability-checker`; the
+examples in this document use `cpu-stability`, which is what the `go build -o`
+line above produces. Same program either way.
+
 Useful non-interactive commands:
 
 ```powershell
