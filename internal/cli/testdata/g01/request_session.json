@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "kind": "session",
+  "config": {},
+  "session": {
+    "mode": "all-core",
+    "physical_cores": [0],
+    "workload": "int",
+    "threads_per_core": 1,
+    "duration_ns": 100000000,
+    "passes": 1,
+    "stop_on_fault": true,
+    "show_metrics": false,
+    "log_file": "gui_session.log",
+    "per_process": false,
+    "rotate": false,
+    "control_core": -1
+  }
+}

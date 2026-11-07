@@ -1,0 +1,12 @@
+{
+  "kind": "data_mismatch",
+  "source": "workload",
+  "message": "slot 3: computed value differs from the reference",
+  "attribution": {
+    "kind": "logical_cpu",
+    "index": 3,
+    "region": "",
+    "confidence": "confirmed",
+    "observed_on": null
+  }
+}

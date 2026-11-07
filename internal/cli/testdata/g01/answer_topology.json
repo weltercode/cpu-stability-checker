@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "windows",
+  "estimated": false,
+  "physical_cores": [
+    {
+      "index": 0,
+      "group": 0,
+      "native_index": 0,
+      "numa_node": 0,
+      "efficiency_class": 0,
+      "ccx_index": 0,
+      "ccx_known": true,
+      "logical_cpus": [
+        { "group": 0, "number": 0, "cpuset_id": 0, "cpuset_id_known": true, "parked": false }
+      ]
+    }
+  ]
+}

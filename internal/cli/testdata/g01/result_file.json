@@ -1,0 +1,23 @@
+{
+  "session_id": "20260101-000000-0000000000000001",
+  "kind": "session",
+  "state": "completed",
+  "started": "2026-01-01T00:00:00Z",
+  "finished": "2026-01-01T00:00:01Z",
+  "exit": 0,
+  "validation": "verified",
+  "recipe_id": "recipe-0000000000000001",
+  "profile_id": "",
+  "plan_hashes": ["0000000000000000"],
+  "runs": [
+    {
+      "name": "pass 1 | all selected physical cores",
+      "log": "gui_session.log",
+      "journal": "gui_session.log.journal.jsonl",
+      "exists": true
+    }
+  ],
+  "dropped_events": 0,
+  "result_file": "C:\\results\\result-20260101-000000-0000000000000001.json",
+  "result_file_error": ""
+}

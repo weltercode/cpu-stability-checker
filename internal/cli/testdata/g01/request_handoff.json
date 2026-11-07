@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "kind": "handoff",
+  "config": {
+    "test": "general",
+    "duration": "100ms",
+    "workers": 1,
+    "log_file": "gui_handoff.log",
+    "control_core": -1
+  },
+  "handoff": {
+    "cores_input": "0,1",
+    "cores": [0, 1],
+    "blocks": 4,
+    "block_bytes": 65536,
+    "block_size": "64KiB",
+    "rounds": 1,
+    "seed": 7,
+    "lock": "off",
+    "journal": "gui_handoff.log.journal.jsonl"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "id": "cpu-all",
+      "version": "v1",
+      "category": "cpu",
+      "visibility": "normal",
+      "title": "ÐžÐ±Ñ‰Ð°Ñ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ° CPU",
+      "summary": "Ð’ÑÐµ Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð½Ñ‹Ðµ ÑÐ´Ñ€Ð° Ð¿Ð¾Ð´ Ð¾Ð´Ð¸Ð½Ð°ÐºÐ¾Ð²Ð¾Ð¹ Ð½Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¾Ð¹",
+      "details": "long description",
+      "validation": "compute",
+      "shape": "session_all",
+      "workload": "int",
+      "preset": "example-preset",
+      "needs_memory": true,
+      "availability": "available",
+      "reason": "",
+      "order": 10
+    }
+  ]
+}

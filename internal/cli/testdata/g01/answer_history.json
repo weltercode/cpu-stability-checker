@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "total": 1,
+  "sessions": [
+    {
+      "session_id": "20260101-000000-0000000000000001",
+      "kind": "session",
+      "state": "completed",
+      "started": "2026-01-01T00:00:00Z",
+      "finished": "2026-01-01T00:00:01Z",
+      "exit": 0,
+      "validation": "verified",
+      "recipe_id": "recipe-0000000000000001",
+      "profile_id": "",
+      "runs": 1
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    { "name": "WHEA event source", "available": true, "detail": "provider connected" },
+    { "name": "HWiNFO shared memory", "available": false, "detail": "HWiNFO is not running" }
+  ]
+}

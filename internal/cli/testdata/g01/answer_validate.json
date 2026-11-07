@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "ok": true,
+  "kind": "session",
+  "runs": 1,
+  "plan_hashes": ["0000000000000000"],
+  "errors": []
+}

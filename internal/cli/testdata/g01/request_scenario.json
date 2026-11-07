@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "kind": "scenario",
+  "config": {
+    "test": "general",
+    "duration": "100ms",
+    "workers": 1,
+    "log_file": "gui_scenario.log",
+    "control_core": -1
+  },
+  "phases": [
+    { "name": "int-a", "a": "int", "cores": [0], "duration": "100ms" },
+    { "name": "int-b", "a": "int", "cores": [0], "duration": "100ms" }
+  ],
+  "cycles": 1
+}

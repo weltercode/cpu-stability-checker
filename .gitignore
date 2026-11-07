@@ -1,0 +1,25 @@
+cpu-stability-*.log
+cpu-stability-*
+cpu-stability.exe
+*.exe~
+cpu-stability.log*
+smoke.exe
+cover.out
+lastrun.json
+lastresult.json
+history/
+tools/
+
+# Run data, never source. Journal rotation archives (and any journal
+# fragment directory) must never reach the index: one archived run is
+# hundreds of per-core files, and an unignored archive folder shows up in
+# a commit as "675 files changed". These patterns cover journals under
+# any -log name, not just the default cpu-stability.log.
+journal-archive-*/
+*.journal.jsonl
+*.journal.jsonl.workers/
+
+# Per-machine configuration. `config init` writes it, it carries this
+# machine's external-tool paths, and it is deliberately not versioned:
+# a checked-in config would be someone else's machine.
+config.json

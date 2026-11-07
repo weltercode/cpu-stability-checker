@@ -1,0 +1,1 @@
+{ "core": 1, "session": "20261021-000000-0011223344556677", "seq": 3, "block": 1, "gen": 1, "mode": "lease-read", "peer_core": 0, "to_ack_ms": 1.5, "checks": 1024, "bytes": 4096, "acked": true, "error": "" }
