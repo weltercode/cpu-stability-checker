@@ -5,12 +5,9 @@ repeatable CPU and RAM stress tests. Its main target is AMD Ryzen on Windows 11
 and newer. Linux support is best effort and may expose fewer topology,
 telemetry, and control capabilities.
 
-The project has two equal goals:
-
-1. build a trustworthy stability checker for per-core, memory, transition, and
-   pair-interaction testing;
-2. teach its owner Go through small, reviewable lessons instead of hiding the
-   design inside large generated changes.
+The goal: a trustworthy stability checker for per-core, memory, transition,
+and pair-interaction testing - built and evolved in small, reviewable
+changes rather than large generated ones.
 
 The program can find errors. A clean run is evidence only for the exact
 workload, duration, cores, memory range, and monitors recorded for that run. It
@@ -322,14 +319,13 @@ the code's own tests and per-run journals prove, not what a plan promised.
 
 ## Contribution style
 
-Changes are intentionally small. Each lesson or increment should state:
+Changes are intentionally small. Each increment should state:
 
 - the user-visible problem;
-- the Go concept being exercised;
 - the files and ownership boundaries involved;
 - the smallest implementation that closes the problem;
 - the regression test and commands used to verify it;
-- remaining limitations and the next lesson.
+- remaining limitations and what stays open.
 
 Prefer one completed vertical change over several partially implemented
 features. Do not rewrite working subsystems just to make the plan look cleaner.
