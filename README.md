@@ -32,7 +32,8 @@ The repository already contains:
 - a recoverable Curve Optimizer transaction layer and fake-only automatic
   tuning.
 
-The application is not release-ready. The active blockers are:
+The application is an experimental preview (this tag is `v0.1.0`), not a finished
+release. The open gaps are:
 
 - the park/wake hypothesis: prepared transitions can now OBSERVE and journal the
   OS parking view inside the measured idle windows when asked to
