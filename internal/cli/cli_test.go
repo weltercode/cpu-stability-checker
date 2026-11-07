@@ -240,6 +240,48 @@ func TestConfigCmdExitCodes(t *testing.T) {
 		}
 	})
 
+	t.Run("config init refuses to overwrite an existing config, and -force replaces it", func(t *testing.T) {
+		dir := chdirTemp(t)
+
+		// A machine's real config: anything distinct from the sample
+		// proves what an overwrite would have destroyed.
+		mine := `{"test":"general","duration":"17s","cores":[1,2],"workload_a":"int"}`
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(mine), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if code := configCmd([]string{"init"}); code != 2 {
+			t.Fatalf("configCmd(init) over an existing config: exit code = %d, want 2 (a named refusal, not a silent clobber)", code)
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != mine {
+			t.Errorf("the refused run must leave the operator's config byte-identical, got:\n%s", raw)
+		}
+
+		// The escape hatch exists, but only when asked for by name.
+		if code := configCmd([]string{"init", "-force"}); code != 0 {
+			t.Fatalf("configCmd(init -force) exit code = %d, want 0", code)
+		}
+		raw, err = os.ReadFile(filepath.Join(dir, "config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) == mine {
+			t.Errorf("-force was asked for but the sample was not written")
+		}
+		if _, err := config.LoadStrict(config.DefaultPath); err != nil {
+			t.Errorf("-force wrote an invalid config: %v", err)
+		}
+
+		// An unknown flag is a named refusal too: never guess intent.
+		if code := configCmd([]string{"init", "--yes"}); code != 2 {
+			t.Fatalf("configCmd(init --yes) exit code = %d, want 2", code)
+		}
+	})
+
 	t.Run("config show without a file exits 0", func(t *testing.T) {
 		chdirTemp(t)
 
