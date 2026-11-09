@@ -158,6 +158,6 @@ func reportSession(sessionID string, asJSON, anomalies bool) int {
 	printProvenance(os.Stdout, attributed)
 	journal.PrintSummary(os.Stdout, journal.SummarizeCores(attributed))
 	printWheaSummary(os.Stdout, attributed)
-	printAnomalies(dips)
+	printAnomalies(os.Stdout, dips)
 	return 0
 }

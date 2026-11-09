@@ -247,10 +247,13 @@ func TestManagedStreamScenarioPhases(t *testing.T) {
 	g01AffinityGuard(t)
 	registerG01Fake(t, "g01b-sc")
 
-	cfg := config.Config{Test: "general", Duration: "50ms", Workers: 1, ControlCore: intPtr(-1), LogFile: "sc.log"}
+	// Windows sized to survive scheduling on a weak shared runner
+	// (same mechanism as the sessionRequest comment: a starved worker
+	// that never completes its mandatory check honestly refuses exit 0).
+	cfg := config.Config{Test: "general", Duration: "1s", Workers: 1, ControlCore: intPtr(-1), LogFile: "sc.log"}
 	req := lastRun{Version: lastRunVersion, Kind: lastRunScenario, Config: &cfg,
-		Phases: []config.Phase{{Name: "one", A: "g01b-sc", Cores: []int{0}, Duration: "50ms"},
-			{Name: "two", A: "g01b-sc", Cores: []int{0}, Duration: "50ms"}},
+		Phases: []config.Phase{{Name: "one", A: "g01b-sc", Cores: []int{0}, Duration: "750ms"},
+			{Name: "two", A: "g01b-sc", Cores: []int{0}, Duration: "750ms"}},
 		Cycles: 2}
 	dir := t.TempDir()
 

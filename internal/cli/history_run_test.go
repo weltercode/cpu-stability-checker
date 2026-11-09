@@ -100,14 +100,23 @@ func TestSessionManifestNamesLogsAndFinalizes(t *testing.T) {
 		}})
 	defer workload.Delete("hist-session-fake")
 
+	// 750ms, not 50ms: the first Actions runner's pinned-audit step
+	// aborted this session with exit=1 exactly once (no local repro at
+	// the time), and the later 2-core-oversubscription reproduction
+	// showed the mechanism: a 50ms window can expire before the
+	// session's worker completes its window at all on a starved
+	// machine, and the engine honestly refuses the clean exit 0. The
+	// panel line cannot name that cause; the assertions here are
+	// untouched, only the window is sized to scheduling reality.
 	control := -1
 	session := SessionOptions{Mode: sessionAllCore, PhysicalCores: []int{0},
-		Workload: "hist-session-fake", ThreadsPerCore: 1, Duration: 50 * time.Millisecond,
+		Workload: "hist-session-fake", ThreadsPerCore: 1, Duration: 750 * time.Millisecond,
 		Passes: 1, ControlCore: &control, LogFile: "s.log"}
 	topology := sysinfo.Topology{PhysicalCores: []sysinfo.PhysicalCore{
 		{Index: 0, LogicalCPUs: []sysinfo.LogicalCPU{{Number: 0}}},
 	}}
 	if code := runSessionWithPanel(session, topology, nil, nil, "recipe-sess"); code != 0 {
+		dumpSessionDiag(t, "s.log")
 		t.Fatalf("session exit = %d", code)
 	}
 	m := onlyManifest(t)
@@ -130,6 +139,41 @@ func TestSessionManifestNamesLogsAndFinalizes(t *testing.T) {
 	}
 	if !strings.Contains(string(b), fmt.Sprintf(`"session_id":%q`, m.SessionID)) {
 		t.Errorf("child journal does not carry session %s", m.SessionID)
+	}
+}
+
+// dumpSessionDiag prints the durable records of a FAILED session run.
+// The panel line only carries "exit=1, verification=unknown", which is
+// one label shared by several real causes (cancel, a runtime condition,
+// an aborted coverage fold). The journal and the run's own log name the
+// reason per unit, so a red on a machine that cannot be re-run locally
+// (the first Actions runner aborted this session once and no local
+// repro under shuffle, 2-CPU or 1-CPU affinity reproduced it) has to
+// bring its own evidence: a red run now prints why it stopped. This is
+// instrumentation, not a fix: the mechanism stays unnamed until the
+// durable records name it (R07 lesson from the whea fakeQ race).
+func dumpSessionDiag(t *testing.T, logFile string) {
+	t.Helper()
+	for _, f := range []string{logFile, journal.Path(logFile)} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Logf("diag: cannot read %s: %v", f, err)
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if line != "" {
+				t.Logf("diag %s: %s", f, line)
+			}
+		}
+	}
+	if list, warns := listSessionManifests(); len(list) > 0 {
+		for _, m := range list {
+			t.Logf("diag manifest: %+v", m)
+			t.Logf("diag manifest runs: %+v", m.Runs)
+		}
+		for _, w := range warns {
+			t.Logf("diag manifest warning: %v", w)
+		}
 	}
 }
 

@@ -51,6 +51,7 @@ func TestHandoffScenarioCompileFromConfig(t *testing.T) {
 }
 
 func TestHandoffScenarioGate(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // the gate's small handoff geometry; documented upper bound
 	// Small geometry: no refusal even with the engine budget unset and
 	// an inherited slot B that this shape never loads.
 	opt := handoffPhaseOpt()

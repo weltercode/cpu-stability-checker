@@ -133,6 +133,7 @@ func TestHandoffHelperRecordsManifest(t *testing.T) {
 // entry (never approximated with today's defaults), and a managed
 // stream for a run that never started says exactly that.
 func TestHandoffPublicReplayOpens(t *testing.T) {
+	requireMemoryAdmission(t, 8*65536) // the manifest requests 8 x 64KiB
 	chdirTemp(t)
 	h := &handoffRecipe{CoresInput: "0,1", Cores: []int{0, 1}, Blocks: 8, BlockBytes: 65536,
 		BlockSize: "64KiB", Rounds: 2, Seed: 7, Lock: "off", Journal: "x.log.journal.jsonl"}

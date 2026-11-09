@@ -285,6 +285,7 @@ func TestWorkerCmdMemSkippedSlotSpeaksUp(t *testing.T) {
 // must verify every engine byte it was given, with the whole story
 // landing in the journal.
 func TestExecuteSubprocessMemoryEndToEnd(t *testing.T) {
+	requireMemoryAdmission(t, 128<<20) // the fixed budget this run requests
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 	cfg := config.Default()
@@ -453,6 +454,7 @@ func TestWorkerCmdRamEvidenceCappedAndCounted(t *testing.T) {
 // first-touches the regions, the kernel verifies every byte every
 // pass, and clean evidence + coverage land in the journal.
 func TestExecuteSubprocessRamConstantE2E(t *testing.T) {
+	requireMemoryAdmission(t, 128<<20) // the fixed budget this run requests
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 	cfg := config.Default()
@@ -508,6 +510,7 @@ func TestExecuteSubprocessRamConstantE2E(t *testing.T) {
 // The other two ram kernels through the full child-process chain:
 // same budget, same evidence contract, kernel-specific story.
 func TestExecuteSubprocessRamKernelsE2E(t *testing.T) {
+	requireMemoryAdmission(t, 128<<20) // each kernel run requests this fixed budget
 	for _, wl := range []string{"ram-address", "ram-moving", "ram-random"} {
 		t.Run(wl, func(t *testing.T) {
 			dir := chdirTemp(t)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,7 @@ func handoffSpec(t *testing.T) (HandoffSpec, *journal.Writer) {
 }
 
 func TestHandoffE2EClean(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // small handoff geometry (4 x 16KiB class); documented upper bound
 	handoffSeams(t)
 	spec, jw := handoffSpec(t)
 	var stream []leaseEvent
@@ -160,6 +162,7 @@ type leaseEvent struct {
 // the "a race in the tester can never look like a hardware error"
 // claim, tested from the other side.
 func TestHandoffE2ETamperIsKernelFault(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // small handoff geometry; documented upper bound
 	handoffSeams(t)
 	spec, jw := handoffSpec(t)
 	spec.tamper = func(block uint64, view []byte) {
@@ -214,21 +217,25 @@ func TestHandoffE2ETamperIsKernelFault(t *testing.T) {
 // silently change what each worker holds are refused up front.
 func TestHandoffSpecRefusals(t *testing.T) {
 	cases := []struct {
-		name  string
-		mut   func(*HandoffSpec)
-		match string
+		name    string
+		minCPUs int // fixture names CPUs 0..minCPUs-1; smaller box => the range check masks the contract under test
+		mut     func(*HandoffSpec)
+		match   string
 	}{
-		{"one core proves nothing", func(s *HandoffSpec) { s.Cores = []int{0} }, "at least two cores"},
-		{"duplicate cpu proves nothing across cores", func(s *HandoffSpec) { s.Cores = []int{0, 0} }, "selected twice"},
-		{"cpu that does not exist here", func(s *HandoffSpec) { s.Cores = []int{0, 9999} }, "does not exist"},
-		{"ragged blocks", func(s *HandoffSpec) { s.Blocks = 5 }, "divide evenly"},
-		{"fewer blocks than cores", func(s *HandoffSpec) { s.Cores = []int{0, 1, 2, 3}; s.Blocks = 2 }, "divide evenly"},
-		{"non-word block size", func(s *HandoffSpec) { s.BlockBytes = 4095 }, "multiple of the 4-byte word"},
-		{"zero rounds", func(s *HandoffSpec) { s.Rounds = 0 }, "at least one round"},
-		{"garbage lock mode", func(s *HandoffSpec) { s.Lock = "maybe" }, "memory lock"},
+		{"one core proves nothing", 1, func(s *HandoffSpec) { s.Cores = []int{0} }, "at least two cores"},
+		{"duplicate cpu proves nothing across cores", 1, func(s *HandoffSpec) { s.Cores = []int{0, 0} }, "selected twice"},
+		{"cpu that does not exist here", 1, func(s *HandoffSpec) { s.Cores = []int{0, 9999} }, "does not exist"},
+		{"ragged blocks", 0, func(s *HandoffSpec) { s.Blocks = 5 }, "divide evenly"},
+		{"fewer blocks than cores", 4, func(s *HandoffSpec) { s.Cores = []int{0, 1, 2, 3}; s.Blocks = 2 }, "divide evenly"},
+		{"non-word block size", 0, func(s *HandoffSpec) { s.BlockBytes = 4095 }, "multiple of the 4-byte word"},
+		{"zero rounds", 0, func(s *HandoffSpec) { s.Rounds = 0 }, "at least one round"},
+		{"garbage lock mode", 0, func(s *HandoffSpec) { s.Lock = "maybe" }, "memory lock"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.minCPUs > 0 && runtime.NumCPU() < c.minCPUs {
+				t.Skipf("case names CPUs 0..%d: needs %d logical CPUs to stay in range, this box has %d", c.minCPUs-1, c.minCPUs, runtime.NumCPU())
+			}
 			spec, jw := handoffSpec(t)
 			c.mut(&spec)
 			out := RunHandoff(context.Background(), spec, jw)
@@ -250,6 +257,7 @@ func TestHandoffSpecRefusals(t *testing.T) {
 // ReadAll. A clean handoff verified every word of every block
 // independently, so "verified" is earned, not decorative.
 func TestHandoffExecuteClean(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // small handoff geometry; documented upper bound
 	handoffSeams(t)
 	spec, _ := handoffSpec(t)
 
@@ -339,6 +347,7 @@ func TestHandoffExecuteFault(t *testing.T) {
 // that replaced this test's old "they were already commanded"
 // expectation).
 func TestHandoffInterruptedReapsAll(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // small handoff geometry; documented upper bound
 	handoffSeams(t)
 	spec, jw := handoffSpec(t)
 	spec.Rounds = 200 // long enough that the cancel lands mid-schedule

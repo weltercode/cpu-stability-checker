@@ -1,0 +1,57 @@
+# CI for cpu-stability-checker (R07). This workflow mirrors the
+# canonical local gate (scripts/gate.ps1): same hermetic floor, same
+# pinned audit seed, same serial rule for mixed package batches.
+# It is NOT a substitute for the real-machine acceptance runs (L3) -
+# it is the regression floor that must hold on every push.
+name: gate
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt clean
+        shell: bash
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "unformatted files:"
+            echo "$files"
+            exit 1
+          fi
+      - name: vet
+        run: go vet ./...
+      - name: hermetic floor (-short suite)
+        run: go test -short -p 1 -parallel 1 ./... -count=1 -timeout 400s
+      - name: pinned audit seed, solo
+        run: go test ./internal/cli -shuffle=1792760321706690100 -count=1 -p 1 -parallel 1 -timeout 300s
+      - name: pinned audit seed, serial mixed batch
+        run: go test ./internal/cli ./internal/subprocess ./internal/wmisensor ./internal/hwinfo -shuffle=1792760321706690100 -count=1 -p 1 -parallel 1 -timeout 600s
+
+  cross-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: GOOS=${{ matrix.goos }} go build ./...

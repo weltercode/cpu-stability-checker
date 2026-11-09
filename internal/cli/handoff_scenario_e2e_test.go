@@ -39,6 +39,7 @@ func TestE2EScenarioHandoffPhase(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e builds the exe and runs real two-process handoff")
 	}
+	requireMemoryAdmission(t, 1<<20) // handoff phase geometry; documented upper bound
 	exe := e2eExe(t)
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "config.json"), []byte(handoffScenarioConfig), 0o644); err != nil {

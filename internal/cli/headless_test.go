@@ -31,12 +31,27 @@ func writeRequestFile(t *testing.T, dir string, r lastRun) string {
 	return p
 }
 
+// sessionRequest is the preconditions fixture shared by the managed/
+// headless/repeat/lock tests: their real subject is the durable
+// plumbing (request, stream, receipt, lock takeover), and every one
+// of them requires a CLEAN completed run to exist first.
+//
+// The window matters: on the first Actions runs (R07) and in a local
+// reproduction that oversubscribed a 2-core set, fixed ~50ms windows
+// sometimes starved the worker goroutine past the deadline - it
+// completed zero checks (the "int" case says not_performed then) or
+// never reached its window end, and the engine honestly refused the
+// clean exit 0 these tests promise. That refusal is correct product
+// behavior: a run whose mandatory check never happened may not be
+// claimed as clean. The window is therefore sized for scheduling
+// reality, not for the dev box's latency; the assertions themselves
+// are untouched.
 func sessionRequest() lastRun {
 	control := -1
 	return lastRun{Version: lastRunVersion, Kind: lastRunSession,
 		Config: &config.Config{},
 		Session: &SessionOptions{Mode: sessionAllCore, PhysicalCores: []int{0},
-			Workload: "int", ThreadsPerCore: 1, Duration: 50 * time.Millisecond,
+			Workload: "int", ThreadsPerCore: 1, Duration: time.Second,
 			Passes: 1, ControlCore: &control, LogFile: "hr.log"}}
 }
 

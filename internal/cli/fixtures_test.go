@@ -202,9 +202,12 @@ func TestStreamMatchesFixtures(t *testing.T) {
 	checkStreamAgainstFixtures(t, seen)
 
 	// A scenario run: the scenario-shaped phase_started.
-	cfg := config.Config{Test: "general", Duration: "50ms", Workers: 1, ControlCore: intPtr(-1), LogFile: "pin.log"}
+	// Windows sized to survive scheduling on a weak shared runner
+	// (same mechanism as the sessionRequest comment; the fixtures this
+	// test compares are shape/key fixtures, not iteration counts).
+	cfg := config.Config{Test: "general", Duration: "1s", Workers: 1, ControlCore: intPtr(-1), LogFile: "pin.log"}
 	sreq := lastRun{Version: lastRunVersion, Kind: lastRunScenario, Config: &cfg,
-		Phases: []config.Phase{{Name: "one", A: "g01d-pin", Cores: []int{0}, Duration: "50ms"}}}
+		Phases: []config.Phase{{Name: "one", A: "g01d-pin", Cores: []int{0}, Duration: "750ms"}}}
 	sdir := t.TempDir()
 	sgui := startManagedGUI(t, writeRequestFile(t, sdir, sreq), filepath.Join(sdir, "res"))
 	sseen := map[string]eventEnvelope{}

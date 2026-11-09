@@ -40,6 +40,7 @@ func openSwitchJournal(t *testing.T, jp, runID string, cores []int) *journal.Wri
 
 func switchFixture(t *testing.T) (string, []int) {
 	t.Helper()
+	requireFixtureCPUs(t, 4) // participants are fixed cores 0..3; the worker bounds -core by its own NumCPU
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 	jp := filepath.Join(dir, "j.jsonl")

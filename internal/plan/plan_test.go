@@ -380,6 +380,9 @@ func TestOptionsFromPhase(t *testing.T) {
 	})
 
 	t.Run("phase fields override the defaults", func(t *testing.T) {
+		if n := runtime.NumCPU(); n < 4 {
+			t.Skipf("fixture names core 3: needs 4 logical CPUs to stay in range, this box has %d", n)
+		}
 		off := false
 		ph := config.Phase{
 			Name:        "heavy",

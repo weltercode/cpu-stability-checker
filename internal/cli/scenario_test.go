@@ -645,6 +645,7 @@ func TestMenuLoopExitsOnEOF(t *testing.T) {
 // -dry-run compiles generators and repeats, prints the plan, and applies
 // no load at all: no log file, no journal, exit 0.
 func TestScenarioDryRun(t *testing.T) {
+	requireFixtureCPUs(t, 4) // the fixture names cores 0..3 across plain/burst/per-process phases
 	dir := chdirTemp(t)
 	cfg := `{"test":"general","workload_a":"int","duration":"10ms","log_file":"dry.log","phases":[` +
 		`{"name":"plain","cores":[0,1]},` +

@@ -95,6 +95,7 @@ func discardFile(t *testing.T) *os.File {
 // faulted, and the lease loop halts early instead of riding out the
 // schedule.
 func TestHandoffWheaUncorrectedStopsRun(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // small handoff geometry; documented upper bound
 	handoffSeams(t)
 	fw := &fakeSessionWhea{ch: make(chan whea.Event, 4), state: whea.State{Available: true}}
 	prev := wheaFactoryForRun

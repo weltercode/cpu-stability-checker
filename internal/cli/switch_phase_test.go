@@ -10,6 +10,7 @@ package cli
 
 import (
 	"bytes"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,22 @@ import (
 	"github.com/weltercode/cpu-stability-checker/internal/config"
 	"github.com/weltercode/cpu-stability-checker/internal/plan"
 )
+
+// requireFixtureCPUs guards tests whose fixtures name fixed logical
+// CPU numbers (0..need-1). The compiler's own bound for what can
+// exist is runtime.NumCPU(): on a machine with fewer CPUs the named
+// numbers cannot exist, and demanding the compile succeed would
+// judge machine size, not the code (first Actions runner caught
+// exactly this: a 2-CPU box failing fixtures that name core 2). This
+// is the same discipline as the WMI/HWiNFO level skips (R02) and the
+// memory admission skips (R12): a restricted machine reports by name;
+// a capable machine runs the full assertions byte-identical.
+func requireFixtureCPUs(t *testing.T, need int) {
+	t.Helper()
+	if n := runtime.NumCPU(); n < need {
+		t.Skipf("capability skip (audit R07): fixtures name logical CPUs 0..%d, this machine reports only %d: the numbers under test cannot exist here", need-1, n)
+	}
+}
 
 func switchPhaseOpt() plan.Options {
 	return plan.Options{
@@ -30,6 +47,7 @@ func switchPhaseOpt() plan.Options {
 }
 
 func TestSwitchScenarioCompileFromConfig(t *testing.T) {
+	requireFixtureCPUs(t, 4) // fixtures name cores 0..3
 	cfg := config.Default()
 	cfg.WorkloadA, cfg.WorkloadB = "float", "float"
 	cfg.Phases = []config.Phase{{
@@ -83,6 +101,7 @@ func TestSwitchScenarioCompileFromConfig(t *testing.T) {
 }
 
 func TestSwitchScenarioCompileRefusals(t *testing.T) {
+	requireFixtureCPUs(t, 5) // the three-slot case names core 4; range refusals must not mask the named refusals under test
 	for _, tc := range []struct {
 		name string
 		ph   config.Phase

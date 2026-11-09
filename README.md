@@ -29,7 +29,7 @@ The repository already contains:
 - a recoverable Curve Optimizer transaction layer and fake-only automatic
   tuning.
 
-The application is an experimental preview (this tag is `v0.1.0`), not a finished
+The application is an experimental preview (this tag is `v0.1.1`), not a finished
 release. The open gaps are:
 
 - the park/wake hypothesis: prepared transitions can now OBSERVE and journal the
@@ -237,6 +237,20 @@ verdict and validation fields, not just the exit code.
 Important output artifacts include the text log, append-only JSONL journal,
 saved request/session manifest, and final result. Reports must preserve partial
 evidence after cancellation or a worker crash.
+
+## Sharing evidence
+
+`bundle [journal] (-out dir)` packages what a support request needs — journal,
+report (the same text and JSON an operator sees), config, lastresult,
+topology and capability snapshots, and a manifest — through an identity
+scrubber that removes the live hostname, current user and home directory
+(replacement rules are listed in the manifest only by length, so the manifest
+itself cannot leak what it removes). The bundle ends with a self-check over
+every written artifact: if a live identity string survived, `bundle` says so
+and exits `1` — do not post that directory. It also states what it does
+**not** scrub (share names, volume labels, tool paths without a user segment,
+WHEA event-log record ids): read the artifacts before publishing and edit out
+anything you personally recognize.
 
 ## External workloads
 

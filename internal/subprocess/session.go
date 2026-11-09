@@ -38,6 +38,12 @@ type SessionHandle struct {
 	readerDone chan struct{}
 	reaped     bool
 	exit       int
+	// killErr records a forced kill the OS REFUSED during Reap (nil
+	// when the kill was accepted or the process had already left).
+	// The reap promise is that a lingering worker is FORCED, never
+	// waited out; without this record a refused kill and a clean
+	// forced reap look identical in the report.
+	killErr error
 }
 
 // StartSession spawns a --session worker. argv are the worker flags
@@ -290,12 +296,25 @@ func (h *SessionHandle) Reap(bounded time.Duration) int {
 	case err := <-h.done:
 		h.exit = sessionExit(err)
 	case <-time.After(bounded):
-		_ = h.Cmd.Process.Kill()
+		if err := h.Cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			// The OS refused the forced kill. The wait below may now
+			// run until the worker's natural end, and that outcome
+			// must not masquerade as a forced one (audit R11): keep
+			// the error visible to callers and to the tests.
+			h.killErr = err
+		}
 		_ = h.job.Close()
 		h.exit = sessionExit(<-h.done)
 	}
 	return h.exit
 }
+
+// KillFailure reports a forced kill that Reap had to attempt but the
+// OS refused (nil when the kill was accepted, already done, or never
+// needed). It exists so a caller can tell a slow OS apart from a
+// broken promise: a lingering worker that ends at its natural exit
+// after a refused kill is an honest failure, never a success.
+func (h *SessionHandle) KillFailure() error { return h.killErr }
 
 func sessionExit(err error) int {
 	var ee *exec.ExitError

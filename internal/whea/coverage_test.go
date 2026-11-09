@@ -11,8 +11,19 @@ import (
 // this window" - attaches only after a FULL query cycle (newest
 // probe + oldest probe + cursor scan) has succeeded. The start-of-
 // window baseline probe proves the channel answers, nothing more.
+//
+// The oldest() probe is gated so "cycle started, cycle not done" is
+// a guaranteed observation point: on the first Actions runner this
+// test went red NOT because the monitor proved coverage too early
+// (the contract held: Proven arrived only after a completed cycle)
+// but because starved runner goroutine scheduling let the whole cycle
+// finish before the test's first state read. Asserting an
+// intermediate state that may never be observable is timing luck; a
+// gated fake makes the ordering the thing under test.
 func TestCoverageProvenOnlyAfterFullCycle(t *testing.T) {
 	fq := &fakeQ{newestID: 100, oldestID: 1}
+	gate := make(chan struct{})
+	fq.gate = gate
 	m := &Monitor{ch: make(chan Event, 16), stop: make(chan struct{})}
 	go func() {
 		for range m.ch {
@@ -38,6 +49,7 @@ func TestCoverageProvenOnlyAfterFullCycle(t *testing.T) {
 	if st.Proven {
 		t.Fatalf("the baseline probe alone must not prove coverage: %+v", st)
 	}
+	close(gate) // only now may the full cycle pass its oldest probe
 	wait(func(s State) bool { return s.Proven }, "a completed full cycle must prove coverage")
 	m.Close()
 }

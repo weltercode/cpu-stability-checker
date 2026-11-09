@@ -28,6 +28,7 @@ func TestE2EPublicHandoffRun(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e builds the exe and runs real two-process handoff")
 	}
+	requireMemoryAdmission(t, 1<<20) // 4 blocks x 4KiB; documented upper bound
 	exe := e2eExe(t)
 	cwd := t.TempDir()
 

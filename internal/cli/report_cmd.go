@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -73,13 +74,21 @@ func reportCmd(args []string) int {
 		fmt.Printf("journal %s: no valid records\n", path)
 		return 0
 	}
-	fmt.Printf("core report for %s:\n", path)
-	printJournalIssues(os.Stdout, issA)
-	printProvenance(os.Stdout, reports)
-	journal.PrintSummary(os.Stdout, journal.SummarizeCores(reports))
-	printWheaSummary(os.Stdout, reports)
-	printAnomalies(dips)
+	writeReportText(os.Stdout, path, reports, issA, dips)
 	return 0
+}
+
+// writeReportText renders the full text report to any writer: the
+// terminal path and the bundle's in-memory capture share this single
+// renderer, so the bundle can never disagree with what `report`
+// printed on the operator's screen (R09).
+func writeReportText(w io.Writer, path string, reports []journal.RunReport, iss *journal.Issues, dips map[int][]journal.ClockDip) {
+	fmt.Fprintf(w, "core report for %s:\n", path)
+	printJournalIssues(w, iss)
+	printProvenance(w, reports)
+	journal.PrintSummary(w, journal.SummarizeCores(reports))
+	printWheaSummary(w, reports)
+	printAnomalies(w, dips)
 }
 
 // wheaSummaryJSON aggregates the hardware-error evidence across all
@@ -199,7 +208,7 @@ func printProvenance(w interface{ Write([]byte) (int, error) }, reports []journa
 
 // printAnomalies renders the diagnostic dip summary. It never changes
 // the exit code: dips are leads to inspect, not faults.
-func printAnomalies(dips map[int][]journal.ClockDip) {
+func printAnomalies(w io.Writer, dips map[int][]journal.ClockDip) {
 	if len(dips) == 0 {
 		return
 	}
@@ -208,10 +217,10 @@ func printAnomalies(dips map[int][]journal.ClockDip) {
 		cores = append(cores, c)
 	}
 	sort.Ints(cores)
-	fmt.Println("clock dips (diagnostic only, not faults):")
+	fmt.Fprintln(w, "clock dips (diagnostic only, not faults):")
 	for _, c := range cores {
 		worst := dips[c][0]
-		fmt.Printf("  core %d: %d window(s) below 60%% of their phase median, worst %.0f MHz vs median %.0f MHz\n",
+		fmt.Fprintf(w, "  core %d: %d window(s) below 60%% of their phase median, worst %.0f MHz vs median %.0f MHz\n",
 			c, len(dips[c]), worst.ClockMHz, worst.MedianMHz)
 	}
 }

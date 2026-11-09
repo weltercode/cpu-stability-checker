@@ -47,6 +47,7 @@ func TestE2EScenarioSwitchPhase(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e builds the exe and runs real four-process pair-switches")
 	}
+	requireFixtureCPUs(t, 4) // the config fixture names switch cores 0..3
 	exe := e2eExe(t)
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "config.json"), []byte(switchScenarioConfig), 0o644); err != nil {

@@ -222,7 +222,13 @@ func TestDescribeLastOutcomeStatesWhatItKnows(t *testing.T) {
 // id, the receipt is final, and it names the run's actual artifacts.
 func TestRunCmdWritesFinalBoundReceipt(t *testing.T) {
 	chdirTemp(t)
-	args := []string{"-test", "general", "-a", "int", "-duration", "100ms",
+	// 1s, not 100ms: on a weak shared runner (R07 Actions, reproduced
+	// locally by oversubscribing 2 cores) a starved int worker may
+	// complete zero self-checks inside a 100ms window, and the engine
+	// honestly refuses the clean exit 0 this precondition needs
+	// ("not_performed"). Assertions unchanged; the window must survive
+	// scheduling reality.
+	args := []string{"-test", "general", "-a", "int", "-duration", "1s",
 		"-cores", "0", "-control", "-1", "-log", "ok.log"}
 	if code := runCmd(args); code != 0 {
 		t.Fatalf("runCmd exit = %d, want 0", code)
@@ -266,7 +272,8 @@ func TestReceiptFailureNeverChangesTheVerdict(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
-	code := runCmd([]string{"-test", "general", "-a", "int", "-duration", "100ms",
+	// window sized for scheduling reality (see TestRunCmdWritesFinalBoundReceipt)
+	code := runCmd([]string{"-test", "general", "-a", "int", "-duration", "1s",
 		"-cores", "0", "-control", "-1", "-log", "ok.log"})
 	w.Close()
 	os.Stderr = old
@@ -355,7 +362,7 @@ func TestRunSessionFinalizesReceipt(t *testing.T) {
 
 	control := -1
 	session := SessionOptions{Mode: sessionAllCore, PhysicalCores: []int{0},
-		Workload: "receipt-session-fake", ThreadsPerCore: 1, Duration: 50 * time.Millisecond,
+		Workload: "receipt-session-fake", ThreadsPerCore: 1, Duration: 750 * time.Millisecond,
 		Passes: 1, ControlCore: &control, LogFile: filepath.Join(t.TempDir(), "s.log")}
 	topology := sysinfo.Topology{PhysicalCores: []sysinfo.PhysicalCore{
 		{Index: 0, LogicalCPUs: []sysinfo.LogicalCPU{{Number: 0}}},

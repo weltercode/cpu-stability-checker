@@ -43,6 +43,8 @@ func Run(args []string) int {
 		return journalCmd(args[1:])
 	case "report":
 		return reportCmd(args[1:])
+	case "bundle":
+		return bundleCmd(args[1:])
 	case "validate":
 		return validateCmd(args[1:])
 	case "parkwatch":
@@ -107,6 +109,7 @@ Usage:
   cpu-stability config init    write a sample config.json
   cpu-stability journal [file] recover run outcomes from a crash journal
   cpu-stability report  [file] per-core verdict aggregated over the journal
+  cpu-stability bundle  [file] sanitized bug-report bundle (identity removed)
                                (-json: machine-readable output)
                                (-diff other.jsonl: per-core comparison of two
                                 journals; put flags before [file])

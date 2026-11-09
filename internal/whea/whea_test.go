@@ -259,6 +259,17 @@ type fakeQ struct {
 	newestCalls  int // newest() calls so far
 	clearOnCall  int // if >0, the Nth newest() call reports clearTo (log cleared)
 	clearTo      int
+
+	// gate: when non-nil, the FIRST oldest() call parks until the gate
+	// closes. It makes "a full cycle is in progress but not done" a
+	// stable observation point instead of a 10ms lottery: the first
+	// Actions runner proved a test goroutine can be starved long enough
+	// that the whole cycle completes before the test's first state
+	// read, turning an intermediate-state assertion into a flake.
+	// Callers must close the gate (or the call times out and names the
+	// deadlock honestly).
+	gate     chan struct{}
+	gateUsed bool
 }
 
 // add appends a record as if the OS had just written it to the log.
@@ -315,6 +326,16 @@ func (f *fakeQ) newest(_ context.Context) (int, error) {
 
 func (f *fakeQ) oldest(_ context.Context) (int, error) {
 	f.mu.Lock()
+	if f.gate != nil && !f.gateUsed {
+		f.gateUsed = true
+		f.mu.Unlock() // the gate waits OUTSIDE the lock: a parked probe must not freeze the whole fake
+		select {
+		case <-f.gate:
+		case <-time.After(10 * time.Second):
+			return 0, errors.New("fakeQ: oldest gate never released (test bug)")
+		}
+		f.mu.Lock()
+	}
 	defer f.mu.Unlock()
 	return f.oldestID, f.failOld
 }

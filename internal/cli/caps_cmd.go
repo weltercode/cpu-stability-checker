@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -38,11 +39,18 @@ func capsCmd(args []string) int {
 		}
 		return 0
 	}
-	fmt.Println("telemetry capabilities:")
-	for _, c := range capProbes() {
-		capLine(c.name, c.probe)
-	}
+	writeCaps(os.Stdout)
 	return 0
+}
+
+// writeCaps renders the caps text for any writer: the terminal path
+// and the bundle share one renderer (R09), so a bundled capabilities
+// snapshot is exactly what the operator was told live.
+func writeCaps(w io.Writer) {
+	fmt.Fprintln(w, "telemetry capabilities:")
+	for _, c := range capProbes() {
+		capLine(w, c.name, c.probe)
+	}
 }
 
 // capsAnswer is the machine-readable form: available is the same
@@ -143,17 +151,17 @@ func hwinfoCap() (string, bool) {
 	return line, true
 }
 
-func capLine(name string, probe func() (string, bool)) {
+func capLine(w io.Writer, name string, probe func() (string, bool)) {
 	detail, ok := probe()
 	status := "unavailable"
 	if ok {
 		status = "available"
 	}
 	if detail != "" {
-		fmt.Printf("  %-30s %s: %s\n", name+" ....", status, detail)
+		fmt.Fprintf(w, "  %-30s %s: %s\n", name+" ....", status, detail)
 		return
 	}
-	fmt.Printf("  %-30s %s\n", name+" ....", status)
+	fmt.Fprintf(w, "  %-30s %s\n", name+" ....", status)
 }
 
 func coreTimesCap() (string, bool) {

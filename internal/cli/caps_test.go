@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"io"
-	"os"
 	"strings"
 	"testing"
 )
@@ -35,17 +33,9 @@ func TestCapLine(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			old := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-			capLine("probe name", tt.probe)
-			w.Close()
-			os.Stdout = old
-			gotBytes, err := io.ReadAll(r)
-			if err != nil {
-				t.Fatalf("read captured output: %v", err)
-			}
-			got := string(gotBytes)
+			var buf strings.Builder
+			capLine(&buf, "probe name", tt.probe)
+			got := buf.String()
 			for _, want := range tt.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("capLine output %q, want to contain %q", got, want)

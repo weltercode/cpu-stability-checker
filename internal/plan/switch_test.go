@@ -21,6 +21,20 @@ func switchBase() Options {
 	}
 }
 
+// requireFixtureCPUs guards fixtures that NAME fixed logical CPU
+// numbers: ValidateSwitch bounds them by runtime.NumCPU(), so on a
+// smaller machine the numbers cannot exist and a failure would judge
+// machine size, not the code (the pattern is set by the matrix guard
+// below, and by the WMI-level skips R02 / memory-admission skips R12:
+// restricted machine reports by name, capable machine runs the exact
+// original assertions).
+func requireFixtureCPUs(t *testing.T, need int) {
+	t.Helper()
+	if n := runtime.NumCPU(); n < need {
+		t.Skipf("fixture shape names CPUs 0..%d: needs %d logical CPUs to stay in range, this box has %d", need-1, need, n)
+	}
+}
+
 func TestValidateSwitchAbsent(t *testing.T) {
 	if err := ValidateSwitch(Options{TestName: "general", Duration: time.Second}); err != nil {
 		t.Errorf("absent pair-switch must be legal and shape nothing: %v", err)
@@ -28,6 +42,7 @@ func TestValidateSwitchAbsent(t *testing.T) {
 }
 
 func TestValidateSwitchValidShape(t *testing.T) {
+	requireFixtureCPUs(t, 4) // switchBase names cores 0..3
 	opt := switchBase()
 	if err := ValidateSwitch(opt); err != nil {
 		t.Fatalf("valid minimal pair-switch refused: %v", err)
@@ -63,6 +78,7 @@ func TestValidateSwitchMatrixGroupsLegal(t *testing.T) {
 }
 
 func TestValidateSwitchRefusals(t *testing.T) {
+	requireFixtureCPUs(t, 5) // the three-core group names core 4; a size refusal would mask the named refusals under test
 	huge := runtime.NumCPU() + 8
 	for _, c := range []struct {
 		name      string

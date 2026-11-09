@@ -1,0 +1,21 @@
+# Line endings are pinned in the repository, not left to each
+# machine's git config. The Go tooling (gofmt) treats CRLF as
+# unformatted, and Windows CI runners checkout with core.autocrlf=true
+# by default - without this file the SAME committed tree passes
+# gofmt on one machine and fails on another (R07 caught exactly that:
+# the first Actions runs went red on gofmt while local gates were
+# green, because the runner materialized the LF blobs as CRLF).
+#
+# eol=lf: files stay LF in the working tree everywhere (checkout
+# normalizes to LF regardless of autocrlf), which is also what the
+# Go ecosystem expects. This changes nothing about the stored blobs
+# (already LF) - it pins what every future checkout sees.
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf

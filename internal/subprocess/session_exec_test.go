@@ -19,6 +19,7 @@ import (
 // from observations. Exit 0 only because every burst really
 // verified.
 func TestExecuteSessionE2E(t *testing.T) {
+	requireMemoryAdmission(t, 128<<20) // session memory budget requested by this scenario
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 	jp := filepath.Join(dir, "run.log.journal.jsonl")
@@ -147,6 +148,7 @@ func TestExecuteSessionRefusals(t *testing.T) {
 // attribution the blacklist can use, a pre-spawn refusal is a setup
 // error and never a fault.
 func TestExecuteSessionResult(t *testing.T) {
+	requireMemoryAdmission(t, 128<<20) // clean-session subtest requests this memory budget
 	t.Run("clean sessions complete with verified coverage", func(t *testing.T) {
 		dir := chdirTemp(t)
 		useTestBinaryAsWorker(t)

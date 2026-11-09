@@ -23,6 +23,20 @@ import (
 // folding and the commanded-vs-observed separation are asserted here
 // end to end, not just at the driver level.
 
+// requireFixtureCPUs: the switch fixtures name fixed logical CPUs
+// 0..3 (pairs {0,1},{2,3}); the executor bounds core numbers by
+// runtime.NumCPU(), so on a smaller machine those numbers cannot
+// exist and a failure would judge machine size, not the code. Same
+// discipline as the six-CPU matrix guard below and the level/memory
+// capability skips (R02/R12): restricted machine skips by name,
+// capable machine runs the exact original assertions.
+func requireFixtureCPUs(t *testing.T, need int) {
+	t.Helper()
+	if n := runtime.NumCPU(); n < need {
+		t.Skipf("switch fixtures name CPUs 0..%d: needs %d logical CPUs to stay in range, this box has %d", need-1, need, n)
+	}
+}
+
 func switchExecOpt(dir string) plan.Options {
 	return plan.Options{
 		TestName:     "general",
@@ -43,6 +57,7 @@ func switchExecOpt(dir string) plan.Options {
 // and the recovered journal carries the prepared timeline plus the
 // four closed turns plus two complete member views per participant.
 func TestExecuteSwitchE2E(t *testing.T) {
+	requireFixtureCPUs(t, 4) // fixture pairs name cores 0..3
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 	jp := journal.Path(filepath.Join(dir, "run.log"))
@@ -145,6 +160,7 @@ func TestExecuteSwitchE2EThreeGroups(t *testing.T) {
 // faulted member's story says fault, and the fault finding names the
 // synthetic probe (never dressed as a real mismatch).
 func TestExecuteSwitchFaultExit(t *testing.T) {
+	requireFixtureCPUs(t, 4) // fixture pairs name cores 0..3
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 	jp := journal.Path(filepath.Join(dir, "run.log"))
@@ -200,6 +216,7 @@ func TestExecuteSwitchFaultExit(t *testing.T) {
 // record says it never closed and why, and the run stops far short
 // of the prepared span.
 func TestSwitchSensorLossCancelsWorkers(t *testing.T) {
+	requireFixtureCPUs(t, 4) // fixture pairs name cores 0..3
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 
@@ -249,6 +266,7 @@ func TestSwitchSensorLossCancelsWorkers(t *testing.T) {
 // with their reason - and not one journal byte written for a run that
 // was never allowed to exist.
 func TestSwitchEntryRefusals(t *testing.T) {
+	requireFixtureCPUs(t, 4) // the base pairs name cores 0..3; a size refusal would mask the named setup refusals under test
 	dir := chdirTemp(t)
 	useTestBinaryAsWorker(t)
 
@@ -318,6 +336,7 @@ func cpusetSourceAll(parked bool) func() ([]sysinfo.CpuSetState, error) {
 // policy (zero verdict power), every participant carries its own
 // parking_obs record, and the finding states the honest counts.
 func TestExecuteSwitchParkingTryObserved(t *testing.T) {
+	requireFixtureCPUs(t, 4) // switchParkingOpt inherits pairs naming cores 0..3
 	useTestBinaryAsWorker(t)
 	dir := chdirTemp(t)
 	silentWheaForParking(t)
@@ -350,6 +369,7 @@ func TestExecuteSwitchParkingTryObserved(t *testing.T) {
 // (exit 2 naming the fix), never a run whose promise was dead on
 // arrival.
 func TestExecuteSwitchRequiredRefusesDeadSource(t *testing.T) {
+	requireFixtureCPUs(t, 4) // the base pairs name cores 0..3; a size refusal would mask the parking refusal under test
 	useTestBinaryAsWorker(t)
 	dir := chdirTemp(t)
 	swapParkingProbe(t, func() ([]sysinfo.CpuSetState, error) {
@@ -371,6 +391,7 @@ func TestExecuteSwitchRequiredRefusesDeadSource(t *testing.T) {
 // said evidence was needed, the evidence says "the source lives and
 // saw nothing", and that is exactly the unevidenced case.
 func TestExecuteSwitchRequiredUnconfirmedDropsToPartial(t *testing.T) {
+	requireFixtureCPUs(t, 4) // switchParkingOpt inherits pairs naming cores 0..3
 	useTestBinaryAsWorker(t)
 	dir := chdirTemp(t)
 	silentWheaForParking(t)
