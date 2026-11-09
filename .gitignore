@@ -19,6 +19,10 @@ journal-archive-*/
 *.journal.jsonl
 *.journal.jsonl.workers/
 
+# scripts/gate.ps1 writes its log next to the run by default; gate logs
+# are evidence and belong in the operator's log directory, not the tree.
+gate-*.log
+
 # Per-machine configuration. `config init` writes it, it carries this
 # machine's external-tool paths, and it is deliberately not versioned:
 # a checked-in config would be someone else's machine.

@@ -14,6 +14,7 @@ import (
 	"github.com/weltercode/cpu-stability-checker/internal/plan"
 	"github.com/weltercode/cpu-stability-checker/internal/sysinfo"
 	"github.com/weltercode/cpu-stability-checker/internal/tui"
+	"github.com/weltercode/cpu-stability-checker/internal/whea"
 	"github.com/weltercode/cpu-stability-checker/internal/workload"
 )
 
@@ -35,14 +36,29 @@ func TestHistoryMenuListsAndReports(t *testing.T) {
 		Kind: "session", Started: "2026-10-16T10:00:00Z", State: manifestRunning}); err != nil {
 		t.Fatal(err)
 	}
+	// R21: this fixture carries a session manifest stuck "running" - the
+	// hard-lockup witness fires on menu open. Keep the System-log seam
+	// hermetic and answer "clean and empty" (the absence branch).
+	setWitnessSeam(t, func(int) ([]whea.Event, error) { return nil, nil })
 
 	out := captureStdoutAndRun(t, func() {
 		if code := menuLoop(bufio.NewReader(strings.NewReader("5\n1\n1\n\nq\nq\n0\n")), config.Default()); code != 0 {
 			t.Errorf("menu exit = %d, want 0", code)
 		}
 	})
+	// R21 acceptance: the crashed session is shown by the tool ITSELF at
+	// menu open - no one asked for 'journal <file>' here.
 	for _, want := range []string{
-		"Session history",
+		"never reported an ending. This tool reads its own durable records",
+		"session manifest " + oldID,
+		"does NOT mean the end was clean",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("menu-open hard-lockup witness missing %q:\n%s", want, out)
+		}
+	}
+	for _, want := range []string{
+		"--- Session history ---",
 		localWant(t, "2026-10-17T10:00:00Z") + newID + " · run · no errors found",
 		localWant(t, "2026-10-16T10:00:00Z") + oldID + " · session · not finished",
 		"core report for session " + newID,
@@ -52,8 +68,17 @@ func TestHistoryMenuListsAndReports(t *testing.T) {
 			t.Errorf("history screen lost %q:\n%s", want, out)
 		}
 	}
-	if strings.Index(out, newID) > strings.Index(out, oldID) {
-		t.Error("history not newest-first")
+	// Newest-first is a property of the HISTORY SCREEN, compared within
+	// it: since R21 the first menu frame may legitimately name an
+	// unfinished older session BEFORE the history screen is ever opened.
+	// ("Session history and reports" is a menu item title; the screen's
+	// own banner is the anchor.)
+	hs := strings.Index(out, "--- Session history ---")
+	if hs < 0 {
+		t.Fatal("history screen never appeared")
+	}
+	if strings.Index(out[hs:], newID) > strings.Index(out[hs:], oldID) {
+		t.Errorf("history not newest-first:\n%s", out[hs:hs+3000])
 	}
 	// Reading history changed nothing on disk.
 	m, err := loadSessionManifest(oldID)

@@ -99,6 +99,22 @@ func TestManagedStreamEveryLineIsJSON(t *testing.T) {
 	if strings.Contains(string(stdout), "\x1b") {
 		t.Error("ANSI leaked into the event stream")
 	}
+	// R19: the end-of-run evidence block is human prose - it must
+	// reach the human channel (stderr, where the managed swap routes
+	// every print) and must never appear on the machine stream, whose
+	// every line stays one JSON record above.
+	if strings.Contains(string(stdout), "Where the evidence lives") {
+		t.Errorf("evidence block leaked into the JSONL stream:\n%s", stdout)
+	}
+	if !strings.Contains(string(stderr), "Where the evidence lives") {
+		t.Errorf("the managed run lost its end-of-run evidence block:\n%s", stderr)
+	}
+	// R21: the scratch start here has no unfinished evidence, so the
+	// hard-lockup witness must be entirely silent - on both streams. A
+	// clean start pays nothing and pollutes nothing.
+	if strings.Contains(string(stdout), "never reported an ending") || strings.Contains(string(stderr), "never reported an ending") {
+		t.Errorf("hard-lockup witness shown on a clean managed start:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
 	types := map[string]bool{}
 	lastSeq := 0
 	session := ""
@@ -271,6 +287,21 @@ func TestManagedStreamScenarioPhases(t *testing.T) {
 	stderr, _ := io.ReadAll(errR)
 	if code != 0 {
 		t.Fatalf("scenario managed run exit = %d\n%s", code, stderr)
+	}
+	// R19: the scenario pipeline prints its shared evidence block
+	// once per attempt - on the human channel only. The JSONL stream
+	// above stays strictly one record per line (that parse loop IS
+	// the proof: a human line in stdout would fail it).
+	if strings.Contains(string(stdout), "Where the evidence lives") {
+		t.Errorf("evidence block leaked into the JSONL stream:\n%s", stdout)
+	}
+	if n := strings.Count(string(stderr), "Where the evidence lives"); n != 1 {
+		t.Errorf("evidence block shown %d times on stderr, want exactly 1 for the whole scenario:\n%s", n, stderr)
+	}
+	// R21: scratch start, no unfinished evidence: the hard-lockup
+	// witness stays silent on both streams (clean starts pay nothing).
+	if strings.Contains(string(stdout), "never reported an ending") || strings.Contains(string(stderr), "never reported an ending") {
+		t.Errorf("hard-lockup witness shown on a clean managed scenario start:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 	phases := map[string]bool{}
 	var resolved map[string]any

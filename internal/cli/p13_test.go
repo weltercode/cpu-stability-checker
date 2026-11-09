@@ -137,7 +137,7 @@ func TestScenarioMismatchPhaseIsFail(t *testing.T) {
 func TestRunCycleStopReasonCarriesVerdict(t *testing.T) {
 	opts := []plan.Options{{Phase: "mix-trans", A: "ram-constant"}}
 	execute := func(plan.Options) plan.Result { return incidentPhaseResult() }
-	results, ran, stopped, stopMsg := runCycle(opts, &bytes.Buffer{}, execute, false, map[int]bool{})
+	results, ran, stopped, stopMsg := runCycle(opts, &bytes.Buffer{}, execute, false, map[int]bool{}, nil)
 	if stopped != 0 || !ran[0] || results[0].Exit != 1 {
 		t.Fatalf("stopped=%d ran=%v results=%+v", stopped, ran, results)
 	}

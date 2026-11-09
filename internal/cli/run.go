@@ -50,7 +50,14 @@ func runConfiguredIOWithUI(askForConfirmation bool, in io.Reader, out io.Writer,
 		fmt.Fprintf(os.Stderr, "%v\n", perr)
 		return 2
 	}
-	cfg := config.Load(config.DefaultPath)
+	cfg, err := config.LoadOrDefault(config.DefaultPath)
+	if err != nil {
+		// R15: the plan above already refused a broken config; if the
+		// file broke in the meantime this run must not proceed on
+		// silent defaults either.
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		return 2
+	}
 	if msg := externalToolMissing(cfg.External, opt.A, opt.B); msg != "" {
 		fmt.Fprintf(os.Stderr, "%s\n", msg)
 		return 2
@@ -81,7 +88,15 @@ func confirmRun(in io.Reader, out io.Writer) bool {
 }
 
 func runCmd(args []string) int {
-	cfg := config.Load(config.DefaultPath)
+	cfg, err := config.LoadOrDefault(config.DefaultPath)
+	if err != nil {
+		// R15: a present-but-broken config is this machine's plan,
+		// unread. Flag defaults are not "your settings": refusing
+		// before any load is the only honest option.
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Fix the file, or remove it to run on defaults.")
+		return 2
+	}
 	workload.RegisterExternal(cfg.External)
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	testName := fs.String("test", cfg.Test, "test name (see 'list')")
@@ -301,6 +316,13 @@ func runCmd(args []string) int {
 		opt.Parking = ""
 	}
 
+	// R21: the hard-lockup witness comes first. The receipt armed below
+	// is what displaces the previous attempt's pending evidence, so the
+	// block reads and prints that evidence BEFORE this attempt arms -
+	// afterwards it would be gone. A clean start prints nothing here and
+	// queries the System log not at all.
+	printPreviousAttemptWitness(os.Stdout)
+
 	// P08 transition mode: prepared workers, prepared schedule,
 	// commanded vs observed kept apart in the journal.
 	if *bursts > 0 {
@@ -354,6 +376,12 @@ func runCmd(args []string) int {
 		sched := transition.BuildSchedule(*bursts, gap, runDur, jit, *burstSeed)
 		tr := newAttemptReceipt(lr.RecipeID, 1, []string{sessOpt.LogFile}, []string{sessOpt.PlanHash})
 		exit := subprocess.ExecuteSession(sessOpt, sched, stag)
+		// R19: the parent-side Guard watched this session's window in
+		// this process (the children watch their own); capture what
+		// it observed while it belongs to THIS plan. A -bursts run is
+		// one window, not a phase list, so it is named "run".
+		var bobs []wheaObs
+		captureWheaWindow("run", sessOpt.PlanHash, &bobs)
 		// Transition mode's verdict lives in the journal: the CLI only
 		// saw the exit code, so the receipt honestly leaves
 		// execution/validation unknown rather than inferring them.
@@ -364,6 +392,8 @@ func runCmd(args []string) int {
 		// The reproduction note: the parameters that define this run,
 		// printed after the result so a failure can be re-created.
 		fmt.Println(plan.ReproductionParameters(sessOpt))
+		printRunEvidence(os.Stdout,
+			[]manifestRun{{Name: "run", Log: sessOpt.LogFile, Journal: journal.Path(sessOpt.LogFile)}}, bobs)
 		return exit
 	}
 	// A04: the plain CLI run leaves the same recipe every other entry
@@ -387,8 +417,18 @@ func runCmd(args []string) int {
 	opt.SessionID = st.m.SessionID
 	tr := newAttemptReceipt(lr.RecipeID, 1, []string{opt.LogFile}, []string{opt.PlanHash})
 	res := executeOpt(opt)
+	// R19: capture this run's WHEA window at the engine's return,
+	// while the live Guard is still THIS plan's (the evidence block
+	// then names the journal, the sharing route, and any window that
+	// was not cleanly available - each stated per run, never merged).
+	// A single scripted run is one window, not a phase: it is named
+	// "run" here exactly as the journal knows it.
+	var obs []wheaObs
+	captureWheaWindow("run", opt.PlanHash, &obs)
 	tr.finish(res.Exit, []plan.Result{res})
 	st.finish(res.Exit, []plan.Result{res})
 	fmt.Println(plan.ReproductionParameters(opt))
+	printRunEvidence(os.Stdout,
+		[]manifestRun{{Name: "run", Log: opt.LogFile, Journal: journal.Path(opt.LogFile)}}, obs)
 	return res.Exit
 }

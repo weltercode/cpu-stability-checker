@@ -526,6 +526,25 @@ func (g *Guard) WheaCount() int64 {
 	return g.wheaCount
 }
 
+// WheaWindow snapshots the observation state and the reason recorded
+// with it as ONE atomic pair under the lock. Callers at the engine's
+// return boundary (the end-of-run evidence block, R19) need both
+// together: separate reads could pair one window's label with another
+// window's reason. State "" means this run never watched WHEA at all.
+func (g *Guard) WheaWindow() (state, reason string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.wheaState, g.wheaReason
+}
+
+// PlanHash identifies the plan this Guard wraps: it is set on the
+// options before the engine runs and journaled into run_meta. The
+// evidence capture compares it against the phase being closed, so a
+// leftover Guard from an earlier run (the slot survives the run)
+// never speaks for a phase that never had it. opt is immutable after
+// New, so this needs no lock.
+func (g *Guard) PlanHash() string { return g.opt.PlanHash }
+
 // wheaRecord journals an observation-state transition (deduped: only
 // changes are written).
 func (g *Guard) wheaRecord(state, reason string) {

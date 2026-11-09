@@ -285,8 +285,31 @@ func TestConfigCmdExitCodes(t *testing.T) {
 	t.Run("config show without a file exits 0", func(t *testing.T) {
 		chdirTemp(t)
 
-		if code := configCmd(nil); code != 0 {
-			t.Fatalf("configCmd() exit code = %d, want 0", code)
+		out := captureStdoutAndRun(t, func() {
+			if code := configCmd(nil); code != 0 {
+				t.Fatalf("configCmd() exit code = %d, want 0", code)
+			}
+		})
+		// R15: the answer says defaults are in effect and points at
+		// init; it never prints a defaults JSON as if it were this
+		// machine's configuration.
+		if !strings.Contains(out, "built-in defaults") || !strings.Contains(out, "config init") {
+			t.Errorf("bare config lost the honest missing-file answer:\n%s", out)
+		}
+	})
+
+	t.Run("config show over a broken file refuses by name", func(t *testing.T) {
+		chdirTemp(t)
+		if err := os.WriteFile("config.json", []byte("{not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		errOut := captureStderr(t, func() {
+			if code := configCmd(nil); code != 2 {
+				t.Fatalf("configCmd() over broken config: exit code = %d, want 2", code)
+			}
+		})
+		if !strings.Contains(errOut, "configuration error") || !strings.Contains(errOut, "parse") {
+			t.Errorf("refusal must name the parse failure:\n%s", errOut)
 		}
 	})
 }

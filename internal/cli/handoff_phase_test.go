@@ -130,7 +130,7 @@ func TestHandoffRunCycleHeaderAndSkip(t *testing.T) {
 	// blocks across the survivors would be a smaller, differently
 	// claimed experiment.
 	var buf bytes.Buffer
-	if _, ranFlags, stopped, _ := runCycle([]plan.Options{opt}, &buf, execute, true, map[int]bool{1: true}); len(ran) != 0 {
+	if _, ranFlags, stopped, _ := runCycle([]plan.Options{opt}, &buf, execute, true, map[int]bool{1: true}, nil); len(ran) != 0 {
 		t.Errorf("handoff phase ran with a faulted participant: %v", ranFlags)
 	} else if stopped != -1 {
 		t.Errorf("skip reported as stop (%d)", stopped)
@@ -142,7 +142,7 @@ func TestHandoffRunCycleHeaderAndSkip(t *testing.T) {
 	// Clean pass: the header states the geometry, never the inherited
 	// duration this phase does not use.
 	buf.Reset()
-	runCycle([]plan.Options{opt}, &buf, execute, false, nil)
+	runCycle([]plan.Options{opt}, &buf, execute, false, nil, nil)
 	if len(ran) != 1 {
 		t.Fatalf("phase ran %d times, want 1", len(ran))
 	}

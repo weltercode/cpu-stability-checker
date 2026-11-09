@@ -95,6 +95,26 @@ func presetRamExtended(cfg config.Config) []config.Phase {
 	)
 }
 
+// presetQuickCheck (R17): the bounded "is anything obviously wrong
+// right now" window. CPU-only ON PURPOSE: it needs no memory budget,
+// so it answers on any machine without config, and it names what it
+// does NOT cover: no RAM-engine verification, no per-core walk, no
+// soak. The three phases are the existing verified kernels with their
+// own contracts (all-core int, all-core float, prepared idle->load
+// transitions - the wake transient is where overclocked parts fail
+// first); the durations are the preset's promise, ~21s of planned
+// load in total. Worker preparation and teardown add time on top, so
+// entry points describe the window as planned workload plus setup
+// overhead - never as a wall-clock deadline nothing enforces.
+func presetQuickCheck(cfg config.Config) []config.Phase {
+	return []config.Phase{
+		{Name: "quick-int", Test: "general", A: "int", PerProcess: true, Duration: "10s"},
+		{Name: "quick-float", Test: "general", A: "float", PerProcess: true, Duration: "10s"},
+		{Name: "quick-trans", Test: "general", A: "int", PerProcess: true,
+			Bursts: 3, BurstGap: "200ms", BurstRun: "500ms"},
+	}
+}
+
 // presetCoreCycle: every physical core alone, first one SMT thread
 // (siblings idle: a clean single-thread signature), then the whole
 // core with both siblings loading together (shared execution units).
@@ -164,6 +184,7 @@ func allLogicals() []int {
 }
 
 var presets = []preset{
+	{Name: "quick-check", Description: "bounded sanity window (~21s planned load plus setup overhead): all-core int pass 10s, all-core float pass 10s, three prepared idle->load transition bursts. CPU-only: it needs no memory budget and NEVER verifies RAM-engine regions; no per-core walk, no soak. A clean word here covers only these loads in this window and is not a stability verdict.", Phases: presetQuickCheck},
 	{Name: "cpu-baseline", Description: "CPU workloads only: all-core pass, then a sequential per-core walk", Phases: presetCPUBaseline},
 	{Name: "ram-baseline", Description: "memory engine verification: pattern passes + independent data stream (needs memory budget)", NeedsMemory: true, Phases: presetRamBaseline},
 	{Name: "ram-quick", Description: "one basic pattern cycle in engine memory (needs memory budget)", NeedsMemory: true, Phases: presetRamQuick},

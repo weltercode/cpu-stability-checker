@@ -309,7 +309,17 @@ func WorkerCmd(args []string) int {
 	runtime.GOMAXPROCS(1)
 
 	// External workloads come from the config, same as in the parent.
-	workload.RegisterExternal(config.Load(config.DefaultPath).External)
+	// R15 defense in depth: the parent refuses a broken config before
+	// ever spawning, but a worker that sees an unparsable config.json
+	// fails as a whole process instead of silently running with
+	// defaults: an external kernel measured with no registration
+	// journals a wrong story.
+	extCfg, cerr := config.LoadOrDefault(config.DefaultPath)
+	if cerr != nil {
+		fmt.Fprintf(os.Stderr, "worker: configuration error: %v\n", cerr)
+		return 2
+	}
+	workload.RegisterExternal(extCfg.External)
 
 	// Each worker owns exactly one journal file: its own fragment
 	// under the run's fragments dir. The parent never writes here and

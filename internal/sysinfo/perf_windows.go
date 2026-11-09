@@ -3,8 +3,6 @@
 package sysinfo
 
 import (
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -187,45 +185,33 @@ func instanceName(p *uint16) string {
 // agree; disagreement is ambiguous calibration, and guessing would
 // put fake MHz numbers on the panel - so we refuse instead and the
 // caller stays on the honest tsc label.
+//
+// Rewrite note (2026-11-09, verified live against this dev board):
+// the old inline parser misread the RawSMBIOSData DWORD (a
+// structure-data BYTE count) as a record count - harmless in practice
+// because the loop was also bounded by the buffer - and skipped
+// string areas by scanning for any adjacent NUL pair. On this
+// firmware (which pads some records with an extra NUL) those two
+// quirks happened to cancel, and the old code did reach the Type 4
+// record; a STRICT sequential walk, by contrast, desyncs on this
+// board, which is what the memory collector's development probe
+// proved. The shared scan+validate path replaces both with behavior
+// that is robust by design instead of by luck, and it yields the same
+// 4300 MHz on this machine (verified live). One firmware fact the
+// rewrite had to accommodate: this board's Type 4 record carries
+// corrupted string indices (Processor ID 141, Version 100 in a
+// six-string set) and a garbage Processor Type byte, while its
+// socket string and Max Speed are correct - so Type 4 validation
+// checks only what this firmware demonstrably writes correctly, and
+// disagreement still refuses rather than guesses.
 func ratedBaseMHz() (float64, error) {
-	const rsmb = 0x52534D42 // 'RSMB'
-	size, _, _ := procFirmwareTbl.Call(rsmb, 0, 0, 0)
-	if size == 0 {
-		return 0, errors.New("SMBIOS not available")
+	data, _, err := rsmbTableData()
+	if err != nil {
+		return 0, err
 	}
-	buf := make([]byte, size)
-	n, _, _ := procFirmwareTbl.Call(rsmb, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(size))
-	if int(n) != len(buf) || n < 8 {
-		return 0, errors.New("SMBIOS table truncated")
+	mhz, err := parseRatedProcessorMHz(data)
+	if err != nil {
+		return 0, err
 	}
-	count := int(binary.LittleEndian.Uint16(buf[4:]))
-	base := 0
-	pos := 8
-	for i := 0; i < count && pos+4 <= len(buf); i++ {
-		typ := buf[pos]
-		hdr := int(buf[pos+1])
-		if hdr < 4 {
-			return 0, errors.New("SMBIOS record malformed")
-		}
-		if typ == 4 && hdr >= 0x18 { // Max Speed WORD at 0x16 (SMBIOS 2.0+)
-			max := int(binary.LittleEndian.Uint16(buf[pos+0x16:]))
-			if max > 0 && max < 20000 {
-				if base == 0 {
-					base = max
-				} else if base != max {
-					return 0, fmt.Errorf("SMBIOS processor records disagree (%d vs %d MHz)", base, max)
-				}
-			}
-		}
-		// skip the formatted area, then the strings terminated by a double NUL
-		q := pos + hdr
-		for q+1 < len(buf) && !(buf[q] == 0 && buf[q+1] == 0) {
-			q++
-		}
-		pos = q + 2
-	}
-	if base == 0 {
-		return 0, errors.New("SMBIOS publishes no rated processor speed")
-	}
-	return float64(base), nil
+	return float64(mhz), nil
 }

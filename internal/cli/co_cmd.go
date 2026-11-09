@@ -66,7 +66,15 @@ func coCmd(args []string) int {
 	}
 	path := *tool
 	if path == "" {
-		path = config.Load(config.DefaultPath).CoTool
+		cfg, err := config.LoadOrDefault(config.DefaultPath)
+		if err != nil {
+			// R15: the answer "no CO tool configured" must only be
+			// given when it is TRUE; a broken config.json makes the
+			// configured value unknown, not absent.
+			fmt.Fprintf(os.Stderr, "co: configuration error: %v\n", err)
+			return 2
+		}
+		path = cfg.CoTool
 	}
 	if path == "" {
 		fmt.Fprintln(os.Stderr, "co: no CO tool configured: pass -tool PATH or set co_tool in config.json")

@@ -11,24 +11,15 @@ import (
 	"github.com/weltercode/cpu-stability-checker/internal/journal"
 )
 
-// captureReport runs reportCmd capturing stdout (report output is
-// small, so a plain pipe is enough - no concurrent drain needed).
+// captureReport runs reportCmd capturing stdout. The plain undrained
+// pipe this used had one silent assumption: the report fits the OS
+// pipe buffer. R16's memory provenance segment broke that (5002 bytes
+// on this machine's first real session report), and the write blocked
+// forever with nobody reading - exactly the captureStdout lesson again.
+// captureAnswer is the drain-safe shape the package already carries.
 func captureReport(t *testing.T, args []string) (int, string) {
 	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = w
-	code := reportCmd(args)
-	w.Close()
-	os.Stdout = old
-	out, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return code, string(out)
+	return captureAnswer(t, func() int { return reportCmd(args) })
 }
 
 // writeSessionJournal writes one complete run into a journal file

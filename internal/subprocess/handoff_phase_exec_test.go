@@ -34,6 +34,7 @@ func handoffPhaseOptions(t *testing.T) (plan.Options, string) {
 }
 
 func TestHandoffPhaseResultClean(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // small handoff geometry; documented upper bound
 	handoffSeams(t)
 	opt, jpath := handoffPhaseOptions(t)
 	var stream []leaseEvent

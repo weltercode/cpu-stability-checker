@@ -2,12 +2,72 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
+
+// R15 source pin: the silent fallback is not allowed to come back.
+// This walks the module's Go sources and refuses any call to a bare
+// package-level config.Load - the primitive itself is deleted, and a
+// reintroduced silent-defaults path at even one entry point would
+// re-open the hole where a broken config.json replaces the user's
+// intended test with defaults and the journal then describes a run
+// that never was the planned one. .Load( call shapes on other types
+// (atomic .Load(), Store.Load()) are method calls and stay allowed.
+func TestNoSilentConfigFallbackAnywhere(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := wd
+	for {
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			t.Fatal("no go.mod above the test's working directory")
+		}
+		root = parent
+	}
+
+	var offenders []string
+	err = filepath.Walk(filepath.Join(root, "internal"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		// The pin's own source quotes the forbidden pattern in its
+		// detection rule; skipping this one file is stated, not hidden.
+		if strings.HasSuffix(path, "config_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.Contains(line, "config.Load(") {
+				offenders = append(offenders, fmt.Sprintf("%s:%d: %s", strings.TrimPrefix(path, root+string(os.PathSeparator)), i+1, strings.TrimSpace(line)))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offenders) > 0 {
+		t.Errorf("silent config.Load call sites found (use LoadOrDefault + refusal, or LoadStrict):\n%s",
+			strings.Join(offenders, "\n"))
+	}
+}
 
 func TestDefault(t *testing.T) {
 	cfg := Default()
@@ -35,10 +95,15 @@ func TestDefault(t *testing.T) {
 	}
 }
 
-func TestLoadMissingFile(t *testing.T) {
+// R15 shape, part 1: an ABSENT config is defaults with no error - the
+// file is a saved preference, not a precondition.
+func TestLoadOrDefaultMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "no-such-config.json")
 
-	cfg := Load(path)
+	cfg, err := LoadOrDefault(path)
+	if err != nil {
+		t.Fatalf("missing file must be defaults without error, got %v", err)
+	}
 	if !reflect.DeepEqual(cfg, Default()) {
 		t.Fatalf("config = %+v, want defaults", cfg)
 	}
@@ -48,19 +113,45 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 }
 
-func TestLoadBrokenFile(t *testing.T) {
+// R15 shape, part 2: a BROKEN config is an error, never defaults. The
+// old Load returned Default() here, silently discarding the machine's
+// intended plan; any caller that then started a run reported a pass
+// for a test that never was the planned one. The expectation is
+// inverted on purpose (owner queue 2026-11-09): the fallback WAS the
+// bug.
+func TestLoadOrDefaultBrokenFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), DefaultPath)
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
-	cfg := Load(path)
-	if !reflect.DeepEqual(cfg, Default()) {
-		t.Fatalf("config = %+v, want defaults", cfg)
+	cfg, err := LoadOrDefault(path)
+	if err == nil {
+		t.Fatalf("broken file must refuse, got config %+v", cfg)
 	}
-
+	if !reflect.DeepEqual(cfg, Config{}) {
+		t.Errorf("refusal must carry an empty Config, got %+v", cfg)
+	}
+	// The wrapped message names the file and the parse failure, so
+	// every refusal a user sees points at the thing to fix.
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "parse") {
+		t.Errorf("refusal must name the file and the parse failure, got %v", err)
+	}
 	if _, err := LoadStrict(path); err == nil {
 		t.Fatal("LoadStrict: expected error for malformed json")
+	}
+}
+
+// R15 shape, part 3: unreadable-but-present (here: a directory named
+// config.json) is also a refusal, not a fallback.
+func TestLoadOrDefaultUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, DefaultPath)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrDefault(path); err == nil {
+		t.Fatal("unreadable config must refuse")
 	}
 }
 
@@ -130,8 +221,12 @@ func TestLoadControlCore(t *testing.T) {
 		t.Fatalf("ControlCore = %v, want pointer to -1 (off)", cfg.ControlCore)
 	}
 
-	// Omitted means auto, which is a nil pointer, not core 0.
-	cfg = Load(DefaultPath + ".does-not-exist")
+	// Omitted means auto, which is a nil pointer, not core 0. The
+	// absent-file branch of LoadOrDefault is the honest defaults path.
+	cfg, err = LoadOrDefault(DefaultPath + ".does-not-exist")
+	if err != nil {
+		t.Fatalf("LoadOrDefault(missing): %v", err)
+	}
 	if cfg.ControlCore != nil {
 		t.Errorf("default ControlCore = %v, want nil (auto)", cfg.ControlCore)
 	}

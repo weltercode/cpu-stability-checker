@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -268,13 +269,33 @@ func (c Config) MemoryRequest() (memtest.Request, error) {
 	return memtest.ParseRequest(c.Memory)
 }
 
-// Load reads the configuration, silently falling back to defaults.
-func Load(path string) Config {
-	cfg, err := LoadStrict(path)
-	if err != nil {
-		return Default()
+// LoadOrDefault is the only general load primitive, and it is honest
+// about the difference between the two "no configuration" states
+// (R15, owner queue 2026-11-09):
+//
+//	absent file  -> Default() with a nil error. Defaults are a
+//	                legitimate state (the config is only a saved
+//	                preference), but the CALLER must disclose that
+//	                defaults are in effect - the silent version of
+//	                this rule is what made the old Load dangerous.
+//	broken file  -> empty Config with the error. A file that exists
+//	                but cannot be read or parsed holds this machine's
+//	                deliberate plan (cores, memory budget, durations,
+//	                registered tools). Falling back to defaults there
+//	                silently replaces the user's intended test with a
+//	                different one, and the journal, the report and
+//	                'repeat' then describe a run that never was the
+//	                planned one - a pass becomes a lie about a test
+//	                that never existed. Refusing is the honest action.
+//
+// The old silent Load did exactly that forbidden fallback for EVERY
+// error kind, at eleven call sites including the menu and subprocess
+// workers; it is deleted, and the package tests pin the new shape.
+func LoadOrDefault(path string) (Config, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return Default(), nil
 	}
-	return cfg
+	return LoadStrict(path)
 }
 
 // LoadStrict is used by config-first commands. Unlike Load it reports

@@ -268,7 +268,15 @@ func toolsDetect(args []string) int {
 }
 
 func toolsStatus(args []string) int {
-	cfg := config.Load(config.DefaultPath)
+	cfg, err := config.LoadOrDefault(config.DefaultPath)
+	if err != nil {
+		// R15: status about configured tools needs a readable config.
+		// On silent defaults this screen would honestly-print a lie:
+		// "no external workloads configured" about a file that simply
+		// could not be read.
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		return 2
+	}
 	if cfg.CoTool != "" {
 		state := "MISSING"
 		if _, err := os.Stat(cfg.CoTool); err == nil {

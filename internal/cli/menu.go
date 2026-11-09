@@ -23,7 +23,18 @@ import (
 // source of defaults, while the interactive session can override the settings
 // for one run without rewriting config.json.
 func runMenu() int {
-	cfg := config.Load(config.DefaultPath)
+	cfg, err := config.LoadOrDefault(config.DefaultPath)
+	if err != nil {
+		// R15: a config.json that exists but does not parse is this
+		// machine's deliberate plan; running on silent defaults would
+		// stress with settings nobody chose and journal a pass for a
+		// test that never was the planned one. The menu refuses before
+		// any screen, and the refusal names the fix. (A merely ABSENT
+		// config is fine: defaults plus one honest disclosure line.)
+		fmt.Fprintf(os.Stderr, "menu: config.json failed to parse: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Fix that file, or remove/rename it to run on defaults, or replace it with 'config init -force'.")
+		return 2
+	}
 	// External workloads (Prime95, y-cruncher, ...) live in config.json;
 	// register them up front so the menu's workload picker and 'list'
 	// show them just like the scripted commands do.
@@ -43,12 +54,31 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 	ui := newScreenUI(os.Stdout)
 	defer ui.finish()
 	note := ""
+	// R15 disclosure: an absent config.json is a legitimate defaults
+	// state, but defaults are in effect only if the screen SAYS so -
+	// the old silence is exactly what made the deleted Load dangerous.
+	if _, statErr := os.Stat(config.DefaultPath); os.IsNotExist(statErr) {
+		note = "config.json: not found — defaults are in effect ('config init' writes one)."
+	}
+	// R21: if a previous attempt left unfinished durable evidence, the
+	// first frame says so BEFORE any action can overwrite it (the repeat
+	// path would otherwise arm its receipt straight away). Same block the
+	// scripted entries print, once per piece of evidence per process.
+	var witnessLines []string
+	if ws := previousAttemptWitnessText(); ws != nil {
+		witnessLines = ws
+	}
 	worst := 0
 	for {
 		lines := menuLines(ui)
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
+		}
+		if witnessLines != nil {
+			lines = append(lines, "")
+			lines = append(lines, witnessLines...)
+			witnessLines = nil
 		}
 		ui.screenPrompt(lines, "Action [1]: ")
 
@@ -505,6 +535,7 @@ func diagnosticsMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, worst *i
 			"  5) Leak soak (100 cycles: all modes + fault)",
 			"  6) Core-parking observation (10 s) - what the OS reports, not a claim",
 			"  7) Telemetry capabilities",
+			"  8) This build + this machine, as firmware describes it (read-only)",
 			"  q) Back",
 		}
 		if note != "" {
@@ -553,8 +584,13 @@ func diagnosticsMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, worst *i
 		case "7":
 			fmt.Println()
 			capsCmd(nil)
+		case "8":
+			// Read-only identity: no load, no firmware writes, and the
+			// memory lines are what firmware wrote (never a diagnosis).
+			fmt.Println()
+			versionCmd(nil)
 		default:
-			bad := "Enter a number from 1 to 7, or q to go back."
+			bad := "Enter a number from 1 to 8, or q to go back."
 			if ui.hasScreen() {
 				note = ui.paint(tui.FGBrightRed, bad)
 			} else {
@@ -713,7 +749,6 @@ func wrapLines(s string, width int) []string {
 // happens before any collection, save or load).
 func categoryMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sysinfo.Topology, cat catalog.Category, title string, worst *int) int {
 	cards := categoryCards(cat, catalog.Normal)
-	extended := categoryCards(cat, catalog.Extended)
 	accent := categoryAccent(cat)
 	note := ""
 	for {
@@ -722,11 +757,14 @@ func categoryMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sy
 		for i, c := range cards {
 			lines = append(lines, cardLine(i+1, c.Title, c.Summary, c.Availability != catalog.Available, cols))
 		}
-		next := len(cards)
-		if len(extended) > 0 || cat == catalog.CPU {
-			next++
-			lines = append(lines, fmt.Sprintf("  %d) Extended profiles", next))
-		}
+		// One flat screen: every profile of the category, the manual
+		// registry choice, and the detailed descriptions. The old
+		// "Extended profiles" sub-level is gone by owner decision
+		// (2026-11-09): it held two cards and hid the manual choice,
+		// a nesting whose only effect was to make the useful things
+		// harder to reach.
+		next := len(cards) + 1
+		lines = append(lines, fmt.Sprintf("  %d) Manually pick an algorithm or an external engine", next))
 		detailsIdx := next + 1
 		lines = append(lines, fmt.Sprintf("  %d) Detailed description", detailsIdx), "  q) Back")
 		if note != "" {
@@ -758,84 +796,11 @@ func categoryMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sy
 			detailsSubmenu(in, ui, cards)
 			continue
 		}
-		if idx == next && (len(extended) > 0 || cat == catalog.CPU) {
-			if code := extendedMenu(in, ui, cfg, topology, cat, extended, worst); code != 0 {
-				return code
-			}
-			continue
-		}
-		card := cards[idx-1]
-		if card.Availability != catalog.Available {
-			// The refusal is the card's own recorded Reason, stated in
-			// red plus text before anything is collected or saved.
-			fmt.Println()
-			fmt.Println(ui.paint(tui.FGBrightRed, card.Title+" is not available: "+card.Reason))
-			ui.waitForEnter(in)
-			continue
-		}
-		before := lastAttemptID()
-		code := startProfile(in, ui, cfg, topology, card)
-		if stop, exit := menuRunOutcome(in, ui, worst, code, before); stop {
-			return menuStopExit(in, ui, exit, before)
-		}
-		note = ui.paint(tui.FGBrightRed, runStopNote(code))
-		if note != "" {
-			ui.waitForEnter(in)
-		}
-	}
-}
-
-// extendedMenu offers the category's Extended-visibility cards plus,
-// for CPU, the manual algorithm/external-engine choice (menu plan
-// section 2 item 4). The manual wizard is honestly labeled as manual:
-// it asks mode and workload from the full registry, and its choices
-// stay unknown provenance when no card matches them.
-func extendedMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sysinfo.Topology, cat catalog.Category, extended []catalog.Profile, worst *int) int {
-	note := ""
-	for {
-		lines := []string{"--- Extended profiles ---"}
-		cols := ui.width()
-		for i, c := range extended {
-			lines = append(lines, cardLine(i+1, c.Title, c.Summary, c.Availability != catalog.Available, cols))
-		}
-		next := len(extended)
-		manual := cat == catalog.CPU
-		if manual {
-			next++
-			lines = append(lines, fmt.Sprintf("  %d) Manually pick an algorithm or an external engine", next))
-		}
-		detailsIdx := next + 1
-		lines = append(lines, fmt.Sprintf("  %d) Detailed description", detailsIdx), "  q) Back")
-		if note != "" {
-			lines = append(lines, "", note)
-			note = ""
-		}
-		ui.screenPrompt(lines, "Profile [q]: ")
-
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
-			fmt.Println()
-			return 0
-		}
-		if choice == "" || choice == "q" || choice == "0" {
-			return 0
-		}
-		idx, err := strconv.Atoi(choice)
-		if err != nil || idx < 1 || idx > detailsIdx {
-			bad := "Enter a number from 1 to " + strconv.Itoa(detailsIdx) + " or q to go back."
-			if ui.hasScreen() {
-				note = ui.paint(tui.FGBrightRed, bad)
-			} else {
-				ui.note(ui.paint(tui.FGBrightRed, bad))
-			}
-			continue
-		}
-		if idx == detailsIdx {
-			detailsSubmenu(in, ui, extended)
-			continue
-		}
-		if manual && idx == next {
+		if idx == next {
+			// The manual wizard is honestly labeled as manual: it
+			// asks mode and workload from the registry, and its
+			// choices stay unknown provenance when no card matches
+			// them (menu plan section 2 item 4).
 			before := lastAttemptID()
 			code := interactiveSession(in, ui, cfg, topology)
 			if stop, exit := menuRunOutcome(in, ui, worst, code, before); stop {
@@ -847,8 +812,10 @@ func extendedMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sy
 			}
 			continue
 		}
-		card := extended[idx-1]
+		card := cards[idx-1]
 		if card.Availability != catalog.Available {
+			// The refusal is the card's own recorded Reason, stated in
+			// red plus text before anything is collected or saved.
 			fmt.Println()
 			fmt.Println(ui.paint(tui.FGBrightRed, card.Title+" is not available: "+card.Reason))
 			ui.waitForEnter(in)
@@ -1251,7 +1218,7 @@ func choose(in *bufio.Reader, prompt string, items []string, def int) int {
 }
 
 func chooseWorkload(in *bufio.Reader, defaultName string) (string, bool) {
-	names := workload.Names()
+	names := userWorkloads()
 	items := make([]string, len(names))
 	def := 0
 	for i, name := range names {
@@ -1266,6 +1233,24 @@ func chooseWorkload(in *bufio.Reader, defaultName string) (string, bool) {
 		return "", false
 	}
 	return names[selected], true
+}
+
+// userWorkloads is the registry minus the synthetic fault prober
+// (FaultClass synthetic): the catalog rule "diagnostics never in a
+// user list" holds for the manual picker too, even though the kernel
+// itself stays selectable by name on the CLI, in soak and in the
+// diagnostics submenu. The full truth - including the prober - is
+// what `list` prints.
+func userWorkloads() []string {
+	all := workload.Names()
+	out := make([]string, 0, len(all))
+	for _, name := range all {
+		if w, ok := workload.Get(name); ok && w.FaultClass == workload.FaultSynthetic {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func ask(in *bufio.Reader, prompt, def string) string {

@@ -102,7 +102,7 @@ func TestBundleStripsLiveIdentity(t *testing.T) {
 	}
 	need := map[string]bool{"manifest.txt": false, "journal.jsonl": false, "report.txt": false,
 		"report.json": false, "config.json": false, "lastresult.json": false,
-		"topology.json": false, "caps.json": false, "caps.txt": false}
+		"topology.json": false, "caps.json": false, "caps.txt": false, "version.json": false}
 	for _, n := range names {
 		need[n] = true
 	}
@@ -138,6 +138,25 @@ func TestBundleStripsLiveIdentity(t *testing.T) {
 		// string: the escaped needle form must collapse the whole
 		// home prefix, in any case.
 		t.Errorf("expected the upper-case deep home path folded to %q, got:\n%s", sanitize.HomeToken, js)
+	}
+
+	// Two identity facts, deliberately kept apart (queue R16): the
+	// journal's run_meta names the build and machine that PRODUCED the
+	// evidence, version.json names the build and machine that are
+	// READING it out now. The bundle carries both, version.json keeps
+	// the reading caveat and the firmware memory record (observed, or
+	// unknown with a named reason) instead of silence, and it cannot be
+	// a copy of the fixture's invented identity.
+	vb, err := os.ReadFile(filepath.Join(out, "version.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs := string(vb)
+	if !strings.Contains(vs, `"reading"`) || !strings.Contains(vs, `"memory"`) {
+		t.Errorf("version.json lost its caveat or its memory record:\n%s", vs)
+	}
+	if strings.Contains(vs, "v0.0.0-test") {
+		t.Errorf("version.json repeated the journaled identity instead of naming the exporting build:\n%s", vs)
 	}
 
 	// The manifest documents what it replaced by length only (no raw

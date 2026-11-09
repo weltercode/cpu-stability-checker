@@ -63,7 +63,14 @@ func handoffCmd(args []string) int {
 		}
 		return handoffRepeatPublic()
 	}
-	cfg := config.Load(config.DefaultPath)
+	cfg, err := config.LoadOrDefault(config.DefaultPath)
+	if err != nil {
+		// R15: the public handoff is a tracked run: its geometry comes
+		// from flags or the config plan, and a broken config must not
+		// be papered over with silent defaults here either.
+		fmt.Fprintf(os.Stderr, "handoff: configuration error: %v\n", err)
+		return 2
+	}
 	logFile := *jp
 	if logFile == "" {
 		logFile = cfg.LogFile
@@ -218,6 +225,10 @@ func runHandoffTracked(lr *lastRun, ui *screenUI) int {
 		return 2
 	}
 	opt.PlanHash = planHash(*lr, opt)
+	// R21: the handoff attempt arms a receipt and a running manifest
+	// below; the previous unfinished attempt's evidence is stated before
+	// those take over the durable slots. Silent on a clean start.
+	printPreviousAttemptWitness(os.Stdout)
 	st, serr := newSessionTracker("handoff", lr, []manifestRun{{Name: "handoff", Journal: h.Journal}})
 	if serr != nil {
 		fmt.Fprintf(os.Stderr, "cannot start session: %v\n", serr)
@@ -236,8 +247,14 @@ func runHandoffTracked(lr *lastRun, ui *screenUI) int {
 	}, false)
 	res := executeOptWithPanel(opt, ui.monitor())
 	emitPhaseResult("handoff", res)
+	// R19: the handoff attempt watched WHEA from this process for
+	// its whole window; capture at the return, then close with the
+	// same evidence block every other entry point gives the operator.
+	var obs []wheaObs
+	captureWheaWindow("handoff", opt.PlanHash, &obs)
 	tr.finish(res.Exit, []plan.Result{res})
 	st.finish(res.Exit, []plan.Result{res})
+	printRunEvidence(os.Stdout, []manifestRun{{Name: "handoff", Journal: h.Journal}}, obs)
 	return res.Exit
 }
 

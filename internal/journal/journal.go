@@ -283,6 +283,57 @@ type RunMetaFields struct {
 	// attribution, or the entry point started no tracked session
 	// (unknown, never inferred).
 	SessionID string `json:"session_id,omitempty"`
+	// Memory is the SMBIOS memory identity exactly as the firmware
+	// wrote it (Type 16 array + Type 17 device records): named
+	// observations, never a stability diagnosis, and never personal
+	// identity - serial numbers and asset tags are not collected
+	// upstream (see internal/sysinfo MemoryDevice), so they cannot
+	// reach the journal. nil = not observed: journal predating the
+	// field, platform without an SMBIOS fetcher, or firmware refused
+	// (unknown, never zero-filled).
+	Memory *RunMemoryFields `json:"memory,omitempty"`
+}
+
+// RunMemoryFields / RunMemoryDevice mirror the sysinfo SMBIOS memory
+// observations into the journal (R16). Field names state what SMBIOS
+// wrote, under the names the spec attaches to those offsets; all
+// three speed-shaped fields are recorded verbatim and the tool draws
+// no conclusion from their disagreement, because real firmware is
+// inconsistent: this dev board's Type 17 records report SPD speed
+// 4800, max capability 5600 and a voltage-like 1100 in the slot the
+// spec calls "configured memory clock speed" (verified live
+// 2026-11-09). Comparing those numbers is the reader's work;
+// repairing or interpreting them inside the evidence recorder is
+// not.
+type RunMemoryFields struct {
+	SMBIOSVersion string `json:"smbios_version,omitempty"` // "3.4" style from the firmware header; "" = unknown
+	// UnknownReason is set INSTEAD of observations when the collector
+	// refused (no firmware table on this platform, truncated table,
+	// and so on): the skip stays named in the record instead of
+	// reading as "this machine has no memory records". Never a guess,
+	// and never paired with fabricated numbers.
+	UnknownReason      string            `json:"unknown_reason,omitempty"`
+	ArrayMaxCapacityMB *int              `json:"array_max_capacity_mb,omitempty"` // referenced Type 16 array's declared ceiling in MB; nil = unknown
+	Devices            []RunMemoryDevice `json:"devices,omitempty"`               // every slot record (populated or empty), table order
+	// RejectedCandidates counts malformed memory records the parser
+	// refused. 0 with devices means clean parsing; >0 says the
+	// firmware published worse than what is shown, and what is shown
+	// still passed every validation.
+	RejectedCandidates int `json:"rejected_candidates,omitempty"`
+}
+
+// RunMemoryDevice is one slot as firmware declared it. nil numeric
+// pointers mean "not reported", never zero; SizeMB=0 means the slot
+// was reported empty.
+type RunMemoryDevice struct {
+	Locator       string `json:"locator,omitempty"`       // Device Locator as declared ("DIMM 1")
+	BankLocator   string `json:"bank_locator,omitempty"`  // Bank Locator as declared ("P0 CHANNEL A")
+	Manufacturer  string `json:"manufacturer,omitempty"`  // as declared; "Unknown" is a real firmware string on many kits
+	PartNumber    string `json:"part_number,omitempty"`   // as declared, blanks trimmed
+	SizeMB        *int   `json:"size_mb,omitempty"`       // nil = unknown, 0 = empty slot
+	SPDMaxMTs     *int   `json:"spd_speed_mts,omitempty"` // Type 17 "Speed" as written
+	MaxCapMTs     *int   `json:"max_speed_capability_mts,omitempty"`
+	ConfiguredMTs *int   `json:"configured_clock_mts_as_written,omitempty"` // verbatim; may disagree with the two above - recorded, never repaired
 }
 
 // BuildProvenance reads the VCS stamp Go embeds automatically when the
@@ -1268,10 +1319,104 @@ func FormatProvenance(m *RunMetaFields) string {
 	if m.Seed != nil {
 		seed = fmt.Sprint(*m.Seed)
 	}
-	return fmt.Sprintf("provenance: build %s rev %s (modified: %s) · config sha256 %s · plan sha256 %s · topology %s · seed %s · cpu %q · os %q · bios unknown (not collected)",
+	return fmt.Sprintf("provenance: build %s rev %s (modified: %s) · config sha256 %s · plan sha256 %s · topology %s · seed %s · cpu %q · os %q · bios unknown (not collected) · %s",
 		orUnknown(m.ModuleVer), orUnknown(m.BuildRev), mod, orUnknown(m.ConfigHash),
 		orUnknown(m.PlanHash), orUnknown(m.TopologyFP), seed,
-		orUnknown(m.CPUName), orUnknown(m.OSVersion))
+		orUnknown(m.CPUName), orUnknown(m.OSVersion),
+		FormatMemoryObservations(m.Memory))
+}
+
+// FormatMemoryDevice renders one memory slot's observations. Unknown
+// numeric fields print as "unknown", never as 0: an unobserved value
+// must not read like a measured zero. The three speed fields are named
+// the way SMBIOS names them at those offsets and are never collapsed
+// into one "running speed": the collector refused to interpret them
+// and this renderer must not interpret them either.
+func FormatMemoryDevice(d RunMemoryDevice) string {
+	size := "size unknown"
+	if d.SizeMB != nil {
+		if *d.SizeMB == 0 {
+			size = "reported empty"
+		} else {
+			size = fmt.Sprintf("%d MB", *d.SizeMB)
+		}
+	}
+	mts := func(p *int, name string) string {
+		if p == nil {
+			return name + " unknown"
+		}
+		return name + " " + fmt.Sprint(*p)
+	}
+	part := d.PartNumber
+	if part == "" {
+		part = "part unknown"
+	}
+	return fmt.Sprintf("%s part %q (%s / %s / %s MT/s)", size, part,
+		mts(d.SPDMaxMTs, "spd"), mts(d.MaxCapMTs, "max-cap"),
+		mts(d.ConfiguredMTs, "configured-as-written"))
+}
+
+// FormatMemoryObservations renders the recorded memory observations as
+// one provenance segment ("memory · SMBIOS 3.4 · ..."). It reports
+// what firmware wrote and draws no conclusion: real firmware
+// contradicts itself (this dev board writes SPD speed 4800, max
+// capability 5600 and a voltage-like 1100 in the slot the spec calls
+// "configured memory clock speed"), and a report that quietly picked
+// one of those numbers would be inventing a hardware fact.
+//
+// Slots whose observations match fold behind a count, because the
+// numbers - not the slot names - are what a reader compares across
+// journals; the per-slot detail (locator, bank, manufacturer) stays in
+// the journal record itself and in 'cpu-stability version'.
+//
+// nil renders as a named unknown, never as silence: an absent memory
+// record must not read as "this machine published nothing about its
+// memory" when the real reason is that this build or run did not look.
+// A collector that looked and was refused carries UnknownReason, and
+// that reason is printed verbatim.
+func FormatMemoryObservations(m *RunMemoryFields) string {
+	if m == nil {
+		return "memory unknown (not observed by this run)"
+	}
+	if m.UnknownReason != "" {
+		return "memory unknown (" + m.UnknownReason + ")"
+	}
+	parts := []string{"memory"}
+	if m.SMBIOSVersion != "" {
+		parts = append(parts, "SMBIOS "+m.SMBIOSVersion)
+	} else {
+		parts = append(parts, "SMBIOS version unknown")
+	}
+	if m.ArrayMaxCapacityMB != nil {
+		parts = append(parts, fmt.Sprintf("array max %d MB", *m.ArrayMaxCapacityMB))
+	}
+	if len(m.Devices) == 0 {
+		parts = append(parts, "no memory device records published")
+	} else {
+		seen := map[string]int{}
+		order := []string{}
+		for _, d := range m.Devices {
+			o := FormatMemoryDevice(d)
+			if _, ok := seen[o]; !ok {
+				order = append(order, o)
+			}
+			seen[o]++
+		}
+		groups := make([]string, 0, len(order))
+		for _, o := range order {
+			if n := seen[o]; n > 1 {
+				groups = append(groups, fmt.Sprintf("%d× %s", n, o))
+			} else {
+				groups = append(groups, o)
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%d slot record(s): %s",
+			len(m.Devices), strings.Join(groups, "; ")))
+	}
+	if m.RejectedCandidates > 0 {
+		parts = append(parts, fmt.Sprintf("%d malformed record(s) refused", m.RejectedCandidates))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func PrintReport(w io.Writer, reports []RunReport) {

@@ -31,12 +31,16 @@ const (
 // Visibility decides which lists a profile may appear in. Diagnostic
 // profiles (fault prober, leak soak, worker plumbing) never show up in
 // a user list; they stay reachable through the CLI and the diagnostics
-// submenu (menu plan section 3).
+// submenu (menu plan section 3). There is deliberately no middle
+// "extended" tier: an owner review of the menu on 2026-11-09 named the
+// "Extended profiles" sub-level a nesting with no value — it held two
+// cards and hid the manual choice behind it — so the user-facing
+// catalog is one flat list, and Visibility keeps exactly the one
+// distinction honesty needs (user lists vs diagnostics).
 type Visibility string
 
 const (
-	Normal     Visibility = "normal"     // the ordinary CPU/RAM/MIX lists
-	Extended   Visibility = "extended"   // "Extended profiles" and advanced choices
+	Normal     Visibility = "normal"     // every user-facing menu list, flat
 	Diagnostic Visibility = "diagnostic" // developer diagnostics, never a user list
 )
 
@@ -112,6 +116,15 @@ type Profile struct {
 // table pins that nothing else may sit in a normal list.
 var builtIn = []Profile{
 	// ---- CPU: the goals of menu plan section 2 ----
+	// quick-check leads the list (Order 5) deliberately: it is the
+	// one-command first answer an owner asked for (R17), and the
+	// category screen is where reaching it should cost the least.
+	{ID: "quick-check", Version: "v1", Category: CPU, Visibility: Normal,
+		Title:      "Quick check (bounded)",
+		Summary:    "Bounded safe first pass (~21s planned load plus setup overhead): all-core int, all-core float, wake-up bursts; a clean word here is NOT a stability verdict",
+		Details:    "Three named phases on their existing verification contracts: all-core integer pass (10 s), all-core float pass (10 s), three prepared idle->load transition bursts. CPU-only by design: it asks no memory budget and verifies no RAM-engine regions, walks no core sequence, and is no soak - a pass says these loads in this window verified clean, nothing more. After a fault or an UNVERIFIED word, escalate to the full CPU profiles; after a clean word, deeper evidence needs those longer profiles too. The CLI runs exactly this preset as 'cpu-stability quick'.",
+		Validation: ValidationCompute, Shape: ShapePreset, Preset: "quick-check",
+		Availability: Available, Order: 5},
 	{ID: "cpu-all", Version: "v1", Category: CPU, Visibility: Normal,
 		Title:      "General CPU check",
 		Summary:    "All selected cores under the same load; compute results compared exactly",
@@ -136,14 +149,16 @@ var builtIn = []Profile{
 		Details:    "Workers are prepared in advance and commanded to run idle, then short load bursts arrive on schedule. The journal keeps the commanded schedule and the verified facts apart: transitions appear as transitions. This profile claims only the commands and the acknowledgements - whether the OS really placed a core into a low-power state is a separate observation it does not make here: that evidence is gathered only under an explicit run policy, off by default.",
 		Validation: ValidationCompute, Shape: ShapePreset, Preset: "transitions",
 		Availability: Available, Order: 40},
-	{ID: "cpu-all-float", Version: "v1", Category: CPU, Visibility: Extended,
+	{ID: "cpu-all-float", Version: "v2", Category: CPU, Visibility: Normal,
 		Title:      "General CPU check · floating point",
-		Summary:    "The same all-core walk with floating-point computation as the load",
+		Summary:    "All selected cores under a floating-point load; compute results compared exactly",
+		Details:    "The same all-core walk as the General CPU check, with floating-point math as the load: the FPU/SSE/AVX paths get their own verified turn (each window recomputed and compared). A different failing load usually points at a different failing path.",
 		Validation: ValidationCompute, Shape: ShapeSessionAll, Workload: "float",
 		Availability: Available, Order: 50},
-	{ID: "cpu-all-sha256", Version: "v1", Category: CPU, Visibility: Extended,
+	{ID: "cpu-all-sha256", Version: "v2", Category: CPU, Visibility: Normal,
 		Title:      "General CPU check · SHA-256",
-		Summary:    "All-core walk with an integer-logic hash load",
+		Summary:    "All selected cores under an integer-logic hash load; every digest compared to references",
+		Details:    "The all-core walk with SHA-256 hashing as the load: adds, rotates, xor and modular adds - a different set of integer units than the arithmetic chains, and every digest is compared against an independent scalar reference and published test vectors.",
 		Validation: ValidationCompute, Shape: ShapeSessionAll, Workload: "sha256",
 		Availability: Available, Order: 60},
 
@@ -175,16 +190,18 @@ var builtIn = []Profile{
 		Details:    "Every phase is a separately versioned kernel with its own verification contract; one shared budget per phase. Cross-core block handoff is not part of the set yet; the dwell check verifies data survival across a pause, not DRAM retention; the set is not a Rowhammer test.",
 		Validation: ValidationMemory, Shape: ShapePreset, Preset: "ram-extended", NeedsMemory: true,
 		Availability: Available, Order: 50},
-	{ID: "mem-quick", Version: "v1", Category: RAM, Visibility: Extended,
+	{ID: "mem-quick", Version: "v2", Category: RAM, Visibility: Normal,
 		Title:      "Quick small memory check",
 		Summary:    "A short check of a small buffer: a fast smoke test, not overnight validation",
+		Details:    "A small buffer written and verified inside the engine process: fast, useful as a smoke test. It covers a tiny slice of the address space - a pass here is evidence for this run's small buffer, not for the machine's RAM.",
 		Validation: ValidationMemory, Shape: ShapeSessionAll, Workload: "mem",
-		Availability: Available, Order: 60},
-	{ID: "mem-bandwidth", Version: "v1", Category: RAM, Visibility: Extended,
+		Availability: Available, Order: 70},
+	{ID: "mem-bandwidth", Version: "v2", Category: RAM, Visibility: Normal,
 		Title:      "Memory load without data verification",
 		Summary:    "Memory bandwidth: heat and stress, data is NOT verified - this is not RAM validation",
+		Details:    "Heavy memory traffic without per-word verification: the reads feed a progress checksum, not a verdict. A clean run says the machine survived the load; it says nothing about RAM correctness - it must never be reported as a memory test.",
 		Validation: ValidationMemoryLoad, Shape: ShapeSessionAll, Workload: "mem-bw",
-		Availability: Available, Order: 70},
+		Availability: Available, Order: 80},
 
 	// ---- MIX: sequential now, simultaneous honestly pending ----
 	{ID: "mix-comprehensive", Version: "v1", Category: MIX, Visibility: Normal,
@@ -233,10 +250,9 @@ func Get(id string) (Profile, bool) {
 }
 
 // List returns the cards of one category whose visibility is at most
-// as open as vis (Normal asks for Normal only; Extended includes
-// Normal and Extended; Diagnostic includes everything). Diagnostic
-// cards therefore never surface in a Normal or Extended list. The
-// result is ordered by Order, then ID, and is deterministic.
+// as open as vis (Normal asks for Normal only; Diagnostic includes
+// everything). Diagnostic cards therefore never surface in a Normal
+// list. The result is ordered by Order, then ID, and is deterministic.
 func List(cat Category, vis Visibility) []Profile {
 	var out []Profile
 	for _, p := range builtIn {
@@ -253,7 +269,7 @@ func List(cat Category, vis Visibility) []Profile {
 }
 
 func visibleAt(have, want Visibility) bool {
-	rank := map[Visibility]int{Normal: 0, Extended: 1, Diagnostic: 2}
+	rank := map[Visibility]int{Normal: 0, Diagnostic: 1}
 	return rank[have] <= rank[want]
 }
 
@@ -280,7 +296,7 @@ func lessProfile(a, b Profile) bool {
 // that its completion protocol was seen - the card says what it can.
 func External(name, command string, toolPresent bool) Profile {
 	p := Profile{
-		ID: "ext-" + name, Version: "v1", Category: CPU, Visibility: Extended,
+		ID: "ext-" + name, Version: "v1", Category: CPU, Visibility: Normal,
 		Title:      "External engine: " + name,
 		Summary:    "The external tool schedules its own load; our worker count does not prove its CPU coverage",
 		Details:    "Completion and findings follow the tool's own protocol (the adapter knows its format). An \"available\" status only means the registered command was found on disk.",

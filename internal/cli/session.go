@@ -345,6 +345,12 @@ func runSessionWithPanel(session SessionOptions, topology sysinfo.Topology, pane
 		return 2
 	}
 	defer relLock()
+	// R21: the previous attempt's unfinished evidence is shown before this
+	// session's manifest and receipt take the "pending" slot - the new
+	// attempt must never swallow the old story. Nothing to say (and no
+	// System-log query) when the durable records report no unfinished
+	// attempt.
+	printPreviousAttemptWitness(os.Stdout)
 	// U02: the session gets its unique id and a running manifest
 	// before anything is built or loaded. A setup failure below is
 	// still history (setup_error), and the id names the child log
@@ -421,6 +427,7 @@ func runSessionWithPanel(session SessionOptions, topology sysinfo.Topology, pane
 
 	unverified := 0 // runs that ended clean but never confirmed their own checking
 	results := make([]plan.Result, 0, len(runs))
+	var obs []wheaObs // R19: per-run WHEA windows, captured as each run returns
 	for index, run := range runs {
 		label := "all selected physical cores"
 		if run.physicalCore != nil {
@@ -433,11 +440,16 @@ func runSessionWithPanel(session SessionOptions, topology sysinfo.Topology, pane
 		currentEvents.emit("phase_started", phaseID, sessionPhaseStartedPayload{LogicalCPUs: run.logicalCPUs}, false)
 
 		res := executeOptWithPanel(options[index], panel)
+		// R19: this run's observation window closes at its own
+		// return: a later clean run must not mask a degraded one,
+		// and each window is attributed to the pass that had it.
+		captureWheaWindow(phaseID, options[index].PlanHash, &obs)
 		results = append(results, res)
 		emitPhaseResult(fmt.Sprintf("pass %d | %s", run.pass, label), res)
 		if res.Exit != 0 {
 			panel.Print(fmt.Sprintf("Session stopped during run %d/%d (exit=%d, verification=%s).\n",
 				index+1, len(runs), res.Exit, verificationLabel(res.Validation)))
+			printRunEvidence(os.Stdout, manifestRuns, obs)
 			tr.finish(res.Exit, results)
 			st.finish(res.Exit, results)
 			return res.Exit
@@ -457,6 +469,7 @@ func runSessionWithPanel(session SessionOptions, topology sysinfo.Topology, pane
 		panel.Print(fmt.Sprintf("\nSession completed: %d/%d runs ended clean, %d without confirmed verification.\n",
 			len(runs), len(runs), unverified))
 	}
+	printRunEvidence(os.Stdout, manifestRuns, obs)
 	tr.finish(0, results)
 	st.finish(0, results)
 	return 0

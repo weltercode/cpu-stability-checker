@@ -37,7 +37,12 @@ import (
 //     reported UNSAFE (exit 1) rather than shipped — the promise is
 //     enforced, not decorative;
 //   - a missing optional artifact (no lastresult.json yet) is a named
-//     manifest line, never a silently absent file.
+//     manifest line, never a silently absent file;
+//   - the two identity questions stay separate artifacts: run_meta
+//     inside the journal names the build and machine that PRODUCED the
+//     evidence, version.json names the build and machine that EXPORTED
+//     the bundle (plus what firmware says about this machine's memory
+//     now). Neither one may be read as the other.
 func bundleCmd(args []string) int {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
 	out := fs.String("out", "", "bundle directory (default bug-report-<UTC timestamp>)")
@@ -51,7 +56,12 @@ func bundleCmd(args []string) int {
 		journalPath = fs.Arg(0)
 	}
 	if journalPath == "" {
-		journalPath = journal.Path(config.Load(config.DefaultPath).LogFile)
+		p, err := configuredJournalPath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		journalPath = p
 	}
 	if *out == "" {
 		*out = "bug-report-" + time.Now().UTC().Format("20060102-150405")
@@ -129,6 +139,19 @@ func bundleCmd(args []string) int {
 	var capsText strings.Builder
 	writeCaps(&capsText)
 	b.str("caps.txt", sanitize.Scrub(capsText.String(), rules))
+
+	// version: which build EXPORTED this bundle, and what this
+	// machine's firmware says about its memory today. This is
+	// deliberately a second identity artifact next to the journal's
+	// run_meta: run_meta names the build and machine that PRODUCED the
+	// evidence, version.json names the build and machine that are
+	// READING it out now, and a bundle must not let a reader merge the
+	// two (R16).
+	if s, code := marshaled(versionJSON(collectVersionFacts()), "version"); code != 0 {
+		return code
+	} else {
+		b.str("version.json", sanitize.Scrub(s, rules))
+	}
 
 	// Self-check before the manifest: re-read every written artifact
 	// and demand that no live identity string survives. This is the

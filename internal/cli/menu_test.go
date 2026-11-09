@@ -238,3 +238,51 @@ func TestCategoryMenuOffersDetailedDescriptionChoice(t *testing.T) {
 		t.Errorf("the old bare Details row is still offered:\n%s", out)
 	}
 }
+
+// One flat screen per category (owner, 2026-11-09: "не нужна такая
+// дикая вложенность"): no "Extended profiles" sub-level exists, the
+// ex-extended cards sit among the others, and the manual registry
+// choice is visible at the top level. The wizard's algorithm picker
+// hides the synthetic fault prober (the catalog rule "diagnostics
+// never in a user list" covers the manual pick too) while `list`
+// keeps showing the complete registry.
+func TestMenuNoSecondLevel(t *testing.T) {
+	chdirTemp(t)
+	worst := 0
+	out := captureStdoutAndRun(t, func() {
+		if code := categoryMenu(bufio.NewReader(strings.NewReader("q\n")), &screenUI{},
+			config.Default(), sysinfo.Topology{}, catalog.CPU, "CPU check", &worst); code != 0 {
+			t.Errorf("categoryMenu(back) = %d, want 0", code)
+		}
+	})
+	for _, want := range []string{
+		"General CPU check · floating point",
+		"General CPU check · SHA-256",
+		"Manually pick an algorithm or an external engine",
+		"Detailed description",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("flat CPU menu lost %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"Extended profiles", "The same all-core walk"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("menu still carries %q:\n%s", bad, out)
+		}
+	}
+
+	out = captureStdoutAndRun(t, func() {
+		// "q" at the picker must go back: ok=false, nothing chosen.
+		if _, ok := chooseWorkload(bufio.NewReader(strings.NewReader("q\n")), "int"); ok {
+			t.Error("chooseWorkload(q) did not back out")
+		}
+	})
+	if strings.Contains(out, "always fails") {
+		t.Errorf("the synthetic fault prober is offered in the manual picker:\n%s", out)
+	}
+	for _, want := range []string{"float", "int ", "sha256", "ram-walking"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("picker lost %q:\n%s", want, out)
+		}
+	}
+}

@@ -29,6 +29,8 @@ func Run(args []string) int {
 		return runCmd(args[1:])
 	case "scenario":
 		return scenarioCmd(args[1:])
+	case "quick":
+		return quickCmd(args[1:])
 	case "repeat":
 		return repeatCmd()
 	case "catalog":
@@ -53,6 +55,8 @@ func Run(args []string) int {
 		return handoffCmd(args[1:])
 	case "caps", "capabilities":
 		return capsCmd(args[1:])
+	case "version":
+		return versionCmd(args[1:])
 	case "soak":
 		return soakCmd(args[1:])
 	case "whea":
@@ -104,8 +108,16 @@ Usage:
   cpu-stability topology       show physical cores, SMT siblings, and CPU Sets
   cpu-stability run [options]  scripted run
   cpu-stability scenario       run the "phases" from config.json as one session
+  cpu-stability quick [-yes]   bounded CPU sanity window (all-core int 10s +
+                               all-core float 10s + three wake bursts): one
+                               verdict word, evidence paths, next step. The
+                               clean word covers that window ONLY - it is not
+                               a stability verdict and checks no RAM engine.
                                (-continue-on-fault: exclude faulted cores, keep going)
   cpu-stability menu           open the main menu
+  cpu-stability config           show this machine's effective settings: real path,
+                               file state, every value with its meaning (R18 view;
+                               replaces the old raw JSON dump)
   cpu-stability config init    write a sample config.json
   cpu-stability journal [file] recover run outcomes from a crash journal
   cpu-stability report  [file] per-core verdict aggregated over the journal
@@ -129,6 +141,11 @@ Usage:
                                  recorded sessions, newest first
   cpu-stability topology [-json] physical cores, SMT siblings, CPU Sets
   cpu-stability caps [-json]     which telemetry sources are alive here
+  cpu-stability version [-json]  exact build identity (module version, VCS
+                                 revision, modified state, build time) plus
+                                 this machine's cpu/os and the firmware's own
+                                 memory records, as written. Read-only: it
+                                 starts no load and diagnoses nothing.
   cpu-stability parkwatch [dur] watch OS core-parking transitions (-interval)
   cpu-stability handoff        P07e block-ownership handoff between cores/LLC
                                domains over one shared section. The public form

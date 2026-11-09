@@ -47,7 +47,7 @@ func TestAuditCOJSONFailureExit(t *testing.T) {
 				return &cotx.Result{TxID: "audit-fake", Status: tc.status}
 			}
 			human := coTxResult("recover", mk(), tc.err, false)
-			machine, body := captureCoJSON(t, func() int {
+			machine, body := captureAnswer(t, func() int {
 				return coTxResult("recover", mk(), tc.err, true)
 			})
 			if human != tc.want || machine != tc.want {
@@ -76,7 +76,7 @@ func TestAuditCOJSONFailureExit(t *testing.T) {
 	// formats, and the JSON form carries kind+error as an object.
 	t.Run("no result is a setup failure in both formats", func(t *testing.T) {
 		human := coTxResult("recover", nil, &co.Error{Kind: co.KindNoPrivilege, Op: "probe"}, false)
-		machine, body := captureCoJSON(t, func() int {
+		machine, body := captureAnswer(t, func() int {
 			return coTxResult("recover", nil, &co.Error{Kind: co.KindNoPrivilege, Op: "probe"}, true)
 		})
 		if human != 2 || machine != 2 {
@@ -114,9 +114,11 @@ func TestAuditCOJSONFailureExit(t *testing.T) {
 	})
 }
 
-// captureCoJSON runs fn with os.Stdout redirected (JSON always goes
-// to stdout), returning its exit code and everything it printed.
-func captureCoJSON(t *testing.T, fn func() int) (int, string) {
+// captureAnswer runs fn with os.Stdout redirected, returning its exit
+// code and everything it printed. The info-style commands (catalog,
+// history, caps, version) answer on stdout in both shapes, so this is
+// how their tests read an answer.
+func captureAnswer(t *testing.T, fn func() int) (int, string) {
 	t.Helper()
 	old := os.Stdout
 	r, w, err := os.Pipe()

@@ -466,7 +466,71 @@ func RunProvenance(opt Options) journal.RunMetaFields {
 	m.Seed = &seed
 	id := sysinfo.DiscoverMachineIdentity()
 	m.CPUName, m.OSVersion, m.BIOSVersion = id.CPUName, id.OSVersion, id.BIOSVersion
+	m.Memory = CollectMemoryProvenance()
 	return m
+}
+
+// CollectMemoryProvenance performs the one read-only firmware lookup
+// provenance needs and maps the answer, recording a refusal as a named
+// UnknownReason instead of silence: a run that knows nothing about the
+// machine's memory must be able to say why. It never returns nil and
+// it never starts a load. Both the journal's run_meta and the
+// read-only 'version' command go through here, so the evidence a run
+// leaves and the evidence a user reads are the same values.
+func CollectMemoryProvenance() *journal.RunMemoryFields {
+	prof, err := sysinfo.CollectMemoryProfile()
+	if err != nil {
+		return &journal.RunMemoryFields{UnknownReason: err.Error()}
+	}
+	return MemoryProvenance(prof)
+}
+
+// MemoryProvenance mirrors the sysinfo SMBIOS memory observations into
+// journal fields one-to-one: pointers stay pointers (nil = not
+// reported), no totals, no "effective running speed", no
+// above/below-rating claim is computed here. Provenance is evidence
+// other humans read; the mapping must not smuggle in an
+// interpretation the collector refused to make.
+//
+// It never returns nil for a profile that was actually observed - not
+// even an empty one: an omitted field reads as "nobody looked", while
+// "looked, firmware published no device records" is itself an
+// observation worth recording. A collector that refused is recorded by
+// the caller with UnknownReason instead.
+//
+// Exported because the read-only 'version' command answers with the
+// same mapping a journal records: what the user sees printed and what
+// gets journaled can never drift apart.
+func MemoryProvenance(p sysinfo.MemoryProfile) *journal.RunMemoryFields {
+	f := &journal.RunMemoryFields{
+		SMBIOSVersion:      p.SMBIOSVersion,
+		RejectedCandidates: p.RejectedCandidates,
+	}
+	if p.ArrayMaxCapacityMB != nil {
+		v := *p.ArrayMaxCapacityMB
+		f.ArrayMaxCapacityMB = &v
+	}
+	for _, d := range p.Devices {
+		e := journal.RunMemoryDevice{
+			Locator:      d.Locator,
+			BankLocator:  d.BankLocator,
+			Manufacturer: d.Manufacturer,
+			PartNumber:   d.PartNumber,
+		}
+		for _, cp := range []struct{ src, dst **int }{
+			{&d.SizeMB, &e.SizeMB},
+			{&d.SPDMaxMTs, &e.SPDMaxMTs},
+			{&d.MaxCapMTs, &e.MaxCapMTs},
+			{&d.ConfiguredMTs, &e.ConfiguredMTs},
+		} {
+			if *cp.src != nil {
+				v := **cp.src
+				*cp.dst = &v
+			}
+		}
+		f.Devices = append(f.Devices, e)
+	}
+	return f
 }
 
 // ResolveControlCore keeps the pre-reserve signature for callers that

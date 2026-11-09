@@ -20,12 +20,17 @@ import (
 func TestWheaQueryTextIsWellFormed(t *testing.T) {
 	pred := regexp.MustCompile(`Provider\[@Name='[^']+'\]`)
 	for _, tc := range []struct {
-		name  string
-		xpath string
+		name      string
+		xpath     string
+		providers int
 	}{
-		{name: "cursor read", xpath: xpath(wheaCursorFilter(357974))},
-		{name: "newest records", xpath: xpath(wheaFilter)},
-		{name: "probe", xpath: xpath(probeFilter)},
+		{name: "cursor read", xpath: xpath(wheaCursorFilter(357974)), providers: 3},
+		{name: "newest records", xpath: xpath(wheaFilter), providers: 3},
+		{name: "probe", xpath: xpath(probeFilter), providers: 0},
+		// R21: the shutdown witness query rides the same transport, so it
+		// gets the same bracket law: one unbalanced predicate costs the
+		// whole witness (exit 15001) and reads like a machine problem.
+		{name: "shutdown witness", xpath: xpath(shutdownFilter), providers: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if opens, closes := strings.Count(tc.xpath, "("), strings.Count(tc.xpath, ")"); opens != closes {
@@ -34,10 +39,8 @@ func TestWheaQueryTextIsWellFormed(t *testing.T) {
 			if opens, closes := strings.Count(tc.xpath, "["), strings.Count(tc.xpath, "]"); opens != closes {
 				t.Errorf("unbalanced brackets (%d/%d) in %s", opens, closes, tc.xpath)
 			}
-			if tc.name != "probe" {
-				if n := len(pred.FindAllString(tc.xpath, -1)); n != 3 {
-					t.Errorf("want 3 complete provider predicates, found %d in %s", n, tc.xpath)
-				}
+			if n := len(pred.FindAllString(tc.xpath, -1)); n != tc.providers {
+				t.Errorf("want %d complete provider predicates, found %d in %s", tc.providers, n, tc.xpath)
 			}
 		})
 	}
@@ -76,5 +79,11 @@ func TestRealEventLogAcceptsEveryMonitorQuery(t *testing.T) {
 	}
 	if _, err := wq.recent(ctx, 5); err != nil {
 		t.Errorf("recent query rejected: %v", err)
+	}
+	// R21: the shutdown witness query must be accepted too - the text is
+	// pinned for form, but only the real service proves the whole query
+	// (event-id predicates included) parses its way through.
+	if _, err := wq.shutdowns(ctx, 5); err != nil {
+		t.Errorf("shutdown witness query rejected: %v", err)
 	}
 }

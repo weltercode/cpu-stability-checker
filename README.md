@@ -1,13 +1,15 @@
 # CPU Stability Checker
 
-CPU Stability Checker is an experimental Windows-first diagnostic tool for
+CPU Stability Checker is an experimental, Windows-first diagnostic tool for
 repeatable CPU and RAM stress tests. Its main target is AMD Ryzen on Windows 11
-and newer. Linux support is best effort and may expose fewer topology,
+and newer; Linux support is best effort and may expose fewer topology,
 telemetry, and control capabilities.
 
-The goal: a trustworthy stability checker for per-core, memory, transition,
-and pair-interaction testing - built and evolved in small, reviewable
-changes rather than large generated ones.
+The goal is a stability checker you can trust: it applies load core by core,
+checks results against an independent reference wherever it can, journals every
+run, and tells you what it actually saw — instead of letting "it seemed fine"
+pass for an answer. The project grows one small, reviewable change at a time,
+and you can audit that history in this repository.
 
 The program can find errors. A clean run is evidence only for the exact
 workload, duration, cores, memory range, and monitors recorded for that run. It
@@ -15,34 +17,51 @@ is never a universal guarantee that an overclock or undervolt is stable.
 
 ## Current state
 
-The repository already contains:
+What the tool can already do:
 
 - verified built-in CPU workloads and a memory-test engine;
-- logical-CPU topology discovery and per-worker OS-thread pinning;
+- a one-command all-core sanity check (`quick`) — CPU-only, ~22 seconds of
+  planned load, and its own description says what it never covers (the RAM
+  engine, per-core walks, long soak) so nobody mistakes its verdict for a
+  stability certificate;
+- logical-CPU topology discovery, physical-core walks, and per-worker
+  OS-thread pinning;
 - one-process-per-core execution and Windows Job Object cleanup;
 - multi-phase scenarios, repeatable requests, JSONL events, crash journals,
   history, and reports;
 - `burst`, `pairs`, `curve`, and physical-core `cycle` generators;
 - prepared idle/load sessions and shared-memory ownership handoff;
-- WHEA and temperature monitoring with explicit degraded/unavailable states;
+- WHEA and temperature monitoring with explicit degraded/unavailable states,
+  plus an unexpected-shutdown witness for the quiet-freeze case (see
+  "What every run leaves behind");
+- provenance every run journals: which build wrote it, which config and seed
+  were in force, what machine it ran on, and the firmware's own memory records
+  as written — memory serial numbers are never collected at all;
+- `version` — the exact identity of the running build (module version, VCS
+  revision, modified state, build time) plus this machine and its firmware
+  memory records, read-only;
+- `config` / `config show` — which config file this directory actually reads,
+  its state, and every value with the meaning a run gives it;
 - adapters for external programs such as Prime95 and y-cruncher;
 - a recoverable Curve Optimizer transaction layer and fake-only automatic
   tuning.
 
-The application is an experimental preview (this tag is `v0.1.1`), not a finished
+This is an experimental preview (this tag is `v0.1.2`), not a finished
 release. The open gaps are:
 
-- the park/wake hypothesis: prepared transitions can now OBSERVE and journal the
-  OS parking view inside the measured idle windows when asked to
-  (`parking_policy` in `config.json`, see “What park/wake means here”), but the
-  first real-machine observation honestly came back `unconfirmed` — a confirmed
-  parking-related failure scenario is still unproven on hardware, not refuted;
-- external adapters point at tools you install yourself: a fresh checkout has no
-  `config.json` at all, so every external workload starts out unavailable until
-  you register its tool (`tools status`, `tools detect`, or `config init` plus
-  a manual edit). Nothing is fetched or installed by itself during a test or a
-  run; `tools install` is a separate, explicit command that downloads the one
-  tool you named from its author's own download page and checks its checksum.
+- the park/wake hypothesis: prepared transitions can now OBSERVE and journal
+  the OS parking view inside the measured idle windows when asked to
+  (`parking_policy` in `config.json`, see "What park/wake means here"), but
+  the first real-machine observation honestly came back `unconfirmed` — a
+  confirmed parking-related failure scenario is still unproven on hardware,
+  not refuted;
+- external adapters point at tools you install yourself: a fresh checkout has
+  no `config.json` at all, so every external workload starts out unavailable
+  until you register its tool (`tools status`, `tools detect`, or `config
+  init` plus a manual edit). Nothing is fetched or installed by itself during
+  a test or a run; `tools install` is a separate, explicit command that
+  downloads the one tool you named from its author's own download page and
+  checks its checksum.
 
 The development journal — roadmap, dated audits, validation protocols, the
 hardware-acceptance records behind the statements below — stays in the author's
@@ -61,9 +80,9 @@ machine, or corrupt unrelated work. Before a real run:
 - preview the resolved plan;
 - do not run real Curve Optimizer mutation as an incidental test action.
 
-Automatic CO tuning remains fake-only until the diagnostic-sensitivity gates in
-the roadmap are complete. Ordinary CPU/RAM tests must not change voltage,
-frequency, BIOS, or CO settings.
+Automatic CO tuning remains fake-only until the diagnostic-sensitivity gates
+are complete. Ordinary CPU/RAM tests must not change voltage, frequency, BIOS,
+or CO settings.
 
 ## Build and start
 
@@ -74,11 +93,13 @@ go build -o cpu-stability.exe .
 .\cpu-stability.exe
 ```
 
-The module is public, so an installed tool is one command away:
-`go install github.com/weltercode/cpu-stability-checker@latest` builds the
-currently published tag. That binary is named `cpu-stability-checker`; the
-examples in this document use `cpu-stability`, which is what the `go build -o`
-line above produces. Same program either way.
+The module is public, so an installed tool is one command away: `go install
+github.com/weltercode/cpu-stability-checker@latest` builds the currently
+published tag. That binary is named `cpu-stability-checker`; the examples in
+this document use `cpu-stability`, which is what the `go build -o` line above
+produces. Same program either way. The release zip also carries
+`docs/RECIPES_PUBLIC.md` — practical walkthroughs, from first look to sharing
+evidence.
 
 Useful non-interactive commands:
 
@@ -87,13 +108,20 @@ Useful non-interactive commands:
 .\cpu-stability.exe list
 .\cpu-stability.exe topology
 .\cpu-stability.exe caps
+.\cpu-stability.exe version
+.\cpu-stability.exe config
 .\cpu-stability.exe plan
 .\cpu-stability.exe scenario -dry-run
+.\cpu-stability.exe quick -dry-run
 ```
 
 The executable reads `config.json` from the working directory unless a command
 selects another input. Use `config init` to generate an example rather than
-copying machine-specific external-tool paths from another computer.
+copying machine-specific external-tool paths from another computer. Plain
+`config` (same as `config show`) then prints the absolute path of the file
+actually in play, whether it is absent (defaults said out loud), present but
+unreadable (a refusal with the reason — defaults would describe a run that
+never was the planned one), or read (every value with its meaning for a run).
 
 ## Core selection
 
@@ -106,8 +134,8 @@ Core selectors accept comma-separated numbers and inclusive ranges:
 The task-oriented menu interprets this selection as **physical core numbers**
 and then asks whether to use one thread or all SMT siblings. The low-level
 `run -cores` option and explicit scenario phases use **logical CPU numbers**.
-Always check `topology` before translating between them: two logical CPUs can be
-SMT siblings on one physical core.
+Always check `topology` before translating between them: two logical CPUs can
+be SMT siblings on one physical core.
 
 Examples:
 
@@ -117,16 +145,17 @@ Examples:
 .\cpu-stability.exe run -test abab -a int -b mem -cores 0,1 -per-process
 ```
 
-Use `list` for the workloads and layouts available in the current build. Do not
-infer data verification from the amount of load: for example, a bandwidth-only
-workload can create heavy traffic without proving memory correctness.
+Use `list` for the workloads and layouts available in the current build. Do
+not infer data verification from the amount of load: for example, a
+bandwidth-only workload can create heavy traffic without proving memory
+correctness.
 
-Every finished scenario ends in one of four words - `PASS` (all required load
+Every finished scenario ends in one of four words — `PASS` (all required load
 completed and verified), `FAIL` (a confirmed fault: workload mismatch or WHEA
-hardware record), `INCOMPLETE` (stopped by run control: monitor, tool, setup or
-the operator) and `UNVERIFIED` (the load finished but its correctness contract
-was not confirmed, including zero verified checks) - each carrying its
-structured reason. `UNKNOWN` belongs only to a missing, corrupt or foreign
+hardware record), `INCOMPLETE` (stopped by run control: monitor, tool, setup
+or the operator) and `UNVERIFIED` (the load finished but its correctness
+contract was not confirmed, including zero verified checks) — each carrying
+its structured reason. `UNKNOWN` belongs only to a missing, corrupt or foreign
 result record. Monitoring states stay honest: WHEA claims coverage only after
 completed query cycles ("`WHEA ?`" until then), and a missing temperature
 provider is named as monitoring state, not as a fault.
@@ -139,7 +168,7 @@ whenever the automatic control core would otherwise find no free CPU. The
 default (`""`/`"none"`) keeps every historical behavior byte-identical, and a
 saved recipe replays exactly as recorded; pairing the policy with an explicit
 `control_core` is a named refusal, not a guess. The coverage loss is stated
-out loud in the plan, before the load starts, and in the journal - a 31-of-32
+out loud in the plan, before the load starts, and in the journal — a 31-of-32
 run is never mistaken for a full-coverage one.
 
 ## Layouts and scenario patterns
@@ -169,30 +198,29 @@ Scenario generators compile into ordinary phases before execution:
 `pairs` builds the pair matrix: every pair is its own phase with freshly
 spawned processes. When you need a low-latency switch between prepared
 participants, use a pair-switch phase instead: either name the groups by
-hand (`switch_pairs`) or let the scope fields generate them from the
-detected topology (`switch_scope`: `ccx`/`smt`/`all`, `switch_cores` pool),
-plus `switch_rounds`, `switch_gap` and `switch_run`. Every participant is
-spawned and PREPAREd before the first
-switch, so the measured transition contains no process spawn and no
-memory-engine or workload setup on the measured path; the switch command
-itself still allocates its bookkeeping (a context, channels, goroutines, a
-timer), which is exactly why the journaled per-turn latencies are labeled
-upper bounds rather than exact costs. The
-turn order is fixed or seeded, and the journal keeps the commanded turn
-timeline, the parent's per-turn latencies (labeled upper bounds, IPC round
-trip included) and each member's own view as separate records. The turn gaps
-are measured idle windows, so the `parking_policy` described in “What
-park/wake means here” applies to them too.
+hand (`switch_pairs`) or let the scope fields generate them from the detected
+topology (`switch_scope`: `ccx`/`smt`/`all`, `switch_cores` pool), plus
+`switch_rounds`, `switch_gap` and `switch_run`. Every participant is spawned
+and PREPAREd before the first switch, so the measured transition contains no
+process spawn and no memory-engine or workload setup on the measured path;
+the switch command itself still allocates its bookkeeping (a context,
+channels, goroutines, a timer), which is exactly why the journaled per-turn
+latencies are labeled upper bounds rather than exact costs. The turn order is
+fixed or seeded, and the journal keeps the commanded turn timeline, the
+parent's per-turn latencies (labeled upper bounds, IPC round trip included)
+and each member's own view as separate records. The turn gaps are measured
+idle windows, so the `parking_policy` described in "What park/wake means
+here" applies to them too.
 
-## What “park/wake” means here
+## What "park/wake" means here
 
 The project must distinguish three facts:
 
 1. **idle requested** — our worker stopped issuing workload instructions;
-2. **parking observed** — the kernel's CPU Set enumeration reported this logical
-   CPU's `Parked` flag inside a measured idle window; that flag is the parking
-   engine's own report, and no single low-frequency sample proves a hardware
-   C-state;
+2. **parking observed** — the kernel's CPU Set enumeration reported this
+   logical CPU's `Parked` flag inside a measured idle window; that flag is
+   the parking engine's own report, and no single low-frequency sample proves
+   a hardware C-state;
 3. **wake/load acknowledged** — the prepared worker received the start command
    and began measured work.
 
@@ -208,14 +236,14 @@ and without observed evidence the full verification claim is withheld — the
 run still ends honestly, claiming only `partial`). `observed`, `unconfirmed`
 and `unavailable` are three distinct states and never collapse into each
 other. Where the policy is off, documentation and UI still say `idle` or
-`settle`, never “parked”: the commands prove the schedule, only the
+`settle`, never "parked": the commands prove the schedule, only the
 observation can speak about parking.
 
 ## Results and exit codes
 
 The program keeps execution, validation, findings, coverage, and observation
-quality separate. In particular, unavailable WHEA or temperature data must stay
-`unknown` or `degraded`; it must never silently become “zero errors.”
+quality separate. In particular, unavailable WHEA or temperature data must
+stay `unknown` or `degraded`; it must never silently become "zero errors."
 
 Process exit codes:
 
@@ -234,9 +262,28 @@ honestly (exit `0`) yet withholds the full verification claim, because the
 required evidence was never observed. Scripts must read the result file's
 verdict and validation fields, not just the exit code.
 
+### What every run leaves behind
+
 Important output artifacts include the text log, append-only JSONL journal,
-saved request/session manifest, and final result. Reports must preserve partial
-evidence after cancellation or a worker crash.
+saved request/session manifest, and final result. Reports must preserve
+partial evidence after cancellation or a worker crash.
+
+Every completed run ends with a short block naming the artifacts it just
+wrote: the journal file for each phase (or the honest statement that one
+never got a record), the durable attempt receipt, and the two routes from
+there — `report <journal>` renders the readable story, `bundle <journal>`
+builds the shareable folder.
+
+A silent freeze with no dump leaves a specific shape behind: the receipt stays
+"pending", session manifests stay "running", and journal recovery names the
+cores that started and never reported an ending. The next start notices that
+before it overwrites any of it, and shows the story itself: which record
+never finished, what each journal recovered, and what the OS log answers
+(the unexpected-shutdown records Kernel-Power 41 / EventLog 6008 are shown as
+time candidates only — they are written by the later boot, the tool keeps no
+boot boundaries and names no cause). The unfinished attempt is reported
+`INCOMPLETE` with the start time. A readable log that shows no such record is
+never read as "the end was clean."
 
 ## Sharing evidence
 
@@ -266,9 +313,9 @@ Check the local machine before a run:
 ```
 
 No `config.json` is checked in: a fresh checkout has no external tools
-registered, and `tools status` says so, entry by entry. A stale or wrong path is
-visible, not silent: `tools status` marks the entry `MISSING` and names it, and
-every entry point (the menu, repeats, scripted runs) refuses a missing
+registered, and `tools status` says so, entry by entry. A stale or wrong path
+is visible, not silent: `tools status` marks the entry `MISSING` and names it,
+and every entry point (the menu, repeats, scripted runs) refuses a missing
 registered tool before any load starts, naming the path and exiting 2.
 `config init` writes a portable sample that bakes in no machine-specific paths
 at all, and it refuses to overwrite an existing `config.json` unless you pass
@@ -278,13 +325,13 @@ can find on your machine. Repointing or removing entries is the operator's
 call, not the tool's.
 
 Nothing is downloaded while a test or a run is executing. Fetching a tool is
-always a separate explicit act: `tools install <name>` takes the pinned archive
-from that tool's own download page (Prime95 from mersenne.org, y-cruncher and
-`ryzen-smu-cli` from their GitHub release pages), verifies the pinned SHA-256
-and unpacks it where you point it. Each external tool keeps its own license -
-Prime95 and y-cruncher are freeware, `ryzen-smu-cli` is GPL-3.0 - and the
-public-domain dedication of this project covers only this program and its
-sources, never the tools you register.
+always a separate explicit act: `tools install <name>` takes the pinned
+archive from that tool's own download page (Prime95 from mersenne.org,
+y-cruncher and `ryzen-smu-cli` from their GitHub release pages), verifies the
+pinned SHA-256 and unpacks it where you point it. Each external tool keeps its
+own license — Prime95 and y-cruncher are freeware, `ryzen-smu-cli` is
+GPL-3.0 — and the public-domain dedication of this project covers only this
+program and its sources, never the tools you register.
 
 ## Development checks
 
@@ -296,11 +343,10 @@ go vet -p 1 ./...
 go build -p 1 ./...
 ```
 
-The suite is levelled, and every level is selectable from the
-command line. Skip messages carry the literal `test level N` plus the
-missing capability, so a restricted machine reports honestly instead of
-failing, while a machine that HAS the capability but broken behavior still
-fails as it must.
+The suite is levelled, and every level is selectable from the command line.
+Skip messages carry the literal `test level N` plus the missing capability, so
+a restricted machine reports honestly instead of failing, while a machine that
+HAS the capability but broken behavior still fails as it must.
 
 | Level | What it may touch | How to select |
 |---|---|---|
@@ -313,9 +359,16 @@ External-adapter bookkeeping in `internal/runner` and `internal/subprocess`
 uses hermetic self-re-exec helper children, not real system tools, so the
 journal honesty contracts are covered even in the `-short` gate; real
 `cmd`/`ping` process-tree behavior lives in `internal/workload` and
-`internal/procjob` as L2. The marking is enforced mechanically: meta-tests
-in those packages re-exec the test binary and assert that `-short` and
+`internal/procjob` as L2. The marking is enforced mechanically: meta-tests in
+those packages re-exec the test binary and assert that `-short` and
 `-run 'TestWMI'` select exactly the documented level groups.
+
+The repository also ships its canonical gate as `scripts/gate.ps1`: one
+command that runs gofmt, vet, the serial `-short` suite, the shuffled audit
+batches and the three cross-builds — and first measures the machine, refusing
+to start (its own exit `3`, refusal kept as an artifact) while there is not
+enough free physical and commit memory to host the suite. A machine moment is
+never allowed to read as a code regression.
 
 Do not enable `CPU_TEST_SMOKE_GB` during ordinary development. Hardware stress,
 large allocations, SMU writes, and real CO changes require an explicit user

@@ -182,7 +182,7 @@ func TestScenarioSetupErrorNeverContinuesOrBlacklists(t *testing.T) {
 			return plan.Result{Exit: 2, Aborted: true, Faults: faults}
 		}
 		blacklist := map[int]bool{}
-		_, ran, stopped, _ := runCycle([]plan.Options{{Cores: []int{0}}, {Cores: []int{0}}}, &bytes.Buffer{}, exec, true, blacklist)
+		_, ran, stopped, _ := runCycle([]plan.Options{{Cores: []int{0}}, {Cores: []int{0}}}, &bytes.Buffer{}, exec, true, blacklist, nil)
 		if calls != 1 || stopped != 0 || ran[1] || len(blacklist) != 0 {
 			t.Fatalf("setup error continued/blacklisted: calls=%d stopped=%d ran=%v blacklist=%v", calls, stopped, ran, blacklist)
 		}

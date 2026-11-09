@@ -278,7 +278,7 @@ func TestRunCyclesFinalizesSessionManifest(t *testing.T) {
 		}
 		return plan.Result{Execution: plan.ExecCompleted, Validation: plan.ValVerified}
 	}
-	if code := runCycles(opts, 2, -1, io.Discard, execute, false, nil, st); code != 1 {
+	if code := runCycles(opts, 2, -1, io.Discard, execute, false, nil, st, nil); code != 1 {
 		t.Fatalf("runCycles exit = %d, want 1", code)
 	}
 	m := onlyManifest(t)

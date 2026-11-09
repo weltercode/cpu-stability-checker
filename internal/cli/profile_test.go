@@ -46,6 +46,7 @@ func TestProfileForPreset(t *testing.T) {
 		{"transitions", "cpu-transitions"},
 		{"mixed-validation", "mix-comprehensive"},
 		{"ram-extended", "ram-extended"}, // P07f: the preset now has an available card
+		{"quick-check", "quick-check"},   // R17: the quick preset's card stamps recipe provenance too
 		{"ram-quick", ""},                // profiles without a card stay unknown provenance, never a guess
 		{"", ""},
 		{"no-such-preset", ""},

@@ -79,9 +79,10 @@ func (w *wizard) choose(label, prompt string, items []string, def int) int {
 	}
 }
 
-// chooseWorkload mirrors the free chooseWorkload().
+// chooseWorkload mirrors the free chooseWorkload(): the registry minus
+// the synthetic fault prober (see userWorkloads).
 func (w *wizard) chooseWorkload(defaultName string) (string, bool) {
-	names := workload.Names()
+	names := userWorkloads()
 	items := make([]string, len(names))
 	def := 0
 	for i, name := range names {

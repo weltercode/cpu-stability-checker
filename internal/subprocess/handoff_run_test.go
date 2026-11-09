@@ -301,6 +301,7 @@ func TestHandoffExecuteClean(t *testing.T) {
 // worker exit 1 -> run exit 1, and the validation claim is NOT
 // "verified" (a mismatch happened; no claim may paper over it).
 func TestHandoffExecuteFault(t *testing.T) {
+	requireMemoryAdmission(t, 1<<20) // small handoff geometry; documented upper bound
 	handoffSeams(t)
 	spec, _ := handoffSpec(t)
 	spec.tamper = func(block uint64, view []byte) {

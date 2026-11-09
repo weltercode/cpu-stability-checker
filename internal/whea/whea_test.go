@@ -565,3 +565,60 @@ func TestNilMonitorState(t *testing.T) {
 	}
 	m.Close() // nil-safe
 }
+
+// R21: the shutdown witness rides the same decoder, so the same
+// machine-readable envelope is decoded for Kernel-Power 41 and EventLog
+// 6008 records - and classify() must NOT smuggle WHEA severity or nature
+// into them: these records name the end of a boot, not a hardware error,
+// and their embedded fields (BugcheckCode numbers, localized time strings)
+// are kept as raw evidence exactly as written. An interpreter-free decoder
+// is what lets the CLI witness stay free of diagnosis.
+func TestShutdownRecordsDecodeAsEvidence(t *testing.T) {
+	fixture := "<Events><Event>" +
+		"<System><Provider Name='Microsoft-Windows-Kernel-Power'/><EventID>41</EventID><Version>0</Version><Level>1</Level>" +
+		"<TimeCreated SystemTime='2026-11-09T19:44:12.010000000Z'/><EventRecordID>220001</EventRecordID><Channel>System</Channel></System>" +
+		"<EventData><Data Name='BugcheckCode'>0</Data><Data Name='BugcheckParameter1'>0x0</Data><Data Name='PowerButtonTimestamp'>0</Data></EventData></Event>" +
+		"<Event>" +
+		"<System><Provider Name='EventLog'/><EventID>6008</EventID><Version>1</Version><Level>1</Level>" +
+		"<TimeCreated SystemTime='2026-11-09T19:44:31.000000000Z'/><EventRecordID>220009</EventRecordID><Channel>System</Channel></System>" +
+		"<EventData><Data>2026-11-09</Data><Data>22:41:07</Data><Data>Microsoft Windows 11</Data></EventData></Event>" +
+		"</Events>"
+	evs := parseWevtutilXML(fixture)
+	if len(evs) != 2 {
+		t.Fatalf("decoded %d events, want 2", len(evs))
+	}
+	kp := evs[0]
+	if kp.Provider != "Microsoft-Windows-Kernel-Power" || kp.EventID != 41 || kp.RecordID != 220001 {
+		t.Errorf("envelope decoded wrong: %+v", kp)
+	}
+	if kp.Time.UTC().Format(time.RFC3339) != "2026-11-09T19:44:12Z" {
+		t.Errorf("TimeCreated not parsed as the UTC write-time of the later boot: %v", kp.Time)
+	}
+	if kp.Severity != SevUnknown || kp.Nature != NatureUnknown {
+		t.Errorf("classify gave a shutdown record WHEA-style meaning: sev=%q nature=%q", kp.Severity, kp.Nature)
+	}
+	var bugcheck *DataField
+	for i := range kp.Data {
+		if kp.Data[i].Name == "BugcheckCode" {
+			bugcheck = &kp.Data[i]
+		}
+	}
+	if bugcheck == nil || bugcheck.Value != "0" {
+		t.Errorf("BugcheckCode not kept as-recorded evidence: %+v", kp.Data)
+	}
+	el := evs[1]
+	if el.Provider != "EventLog" || el.EventID != 6008 || el.RecordID != 220009 {
+		t.Errorf("envelope decoded wrong: %+v", el)
+	}
+	if el.Severity != SevUnknown || el.Nature != NatureUnknown {
+		t.Errorf("classify gave a shutdown record WHEA-style meaning: sev=%q nature=%q", el.Severity, el.Nature)
+	}
+	// The localized strings stay un-named evidence, values verbatim: the
+	// decoder never re-dates anything from prose shaped like a time.
+	if len(el.Data) != 3 || el.Data[1].Name != "" || el.Data[1].Value != "22:41:07" {
+		t.Errorf("6008 embedded strings not kept verbatim as evidence: %+v", el.Data)
+	}
+	if _, perr := time.Parse(time.RFC3339, el.Data[1].Value); perr == nil {
+		t.Errorf("a 6008 embedded string parses as a timestamp: the decoder must not invite re-dating")
+	}
+}

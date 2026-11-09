@@ -649,7 +649,7 @@ func scenarioRequirements(cfg config.Config, opts []plan.Options) []string {
 // runScenario executes the phases once and reports the scenario outcome.
 // It is the single-cycle entry point of runCycles.
 func runScenario(opts []plan.Options, out io.Writer, execute func(plan.Options) plan.Result, continueOnFault bool) int {
-	return runCycles(opts, 1, -1, out, execute, continueOnFault, nil, nil)
+	return runCycles(opts, 1, -1, out, execute, continueOnFault, nil, nil, nil)
 }
 
 // runCycles runs the whole phase list `cycles` times as one session. The
@@ -659,7 +659,7 @@ func runScenario(opts []plan.Options, out io.Writer, execute func(plan.Options) 
 // cycling tests in random order, but rerunnable. A cycle that stops
 // (abort without faults, setup error, no usable cores left) ends the
 // scenario; faults with continueOnFault only grow the blacklist.
-func runCycles(opts []plan.Options, cycles int, seed int64, out io.Writer, execute func(plan.Options) plan.Result, continueOnFault bool, tr *attemptReceipt, st *sessionTracker) int {
+func runCycles(opts []plan.Options, cycles int, seed int64, out io.Writer, execute func(plan.Options) plan.Result, continueOnFault bool, tr *attemptReceipt, st *sessionTracker, obs *[]wheaObs) int {
 	faulted := map[int]bool{}
 	var rng *rand.Rand
 	if seed >= 0 {
@@ -677,7 +677,7 @@ func runCycles(opts []plan.Options, cycles int, seed int64, out io.Writer, execu
 			copy(seq, opts)
 			rng.Shuffle(len(seq), func(i, j int) { seq[i], seq[j] = seq[j], seq[i] })
 		}
-		results, ran, stopped, stopMsg := runCycle(seq, out, execute, continueOnFault, faulted)
+		results, ran, stopped, stopMsg := runCycle(seq, out, execute, continueOnFault, faulted, obs)
 		for i, res := range results {
 			if ran[i] {
 				all = append(all, res)
@@ -691,6 +691,16 @@ func runCycles(opts []plan.Options, cycles int, seed int64, out io.Writer, execu
 	}
 	tr.finish(exit, all)
 	st.finish(exit, all)
+	// R19: the end-of-run evidence block. It arrives only for the
+	// entry points that asked for observation capture (obs non-nil):
+	// test harnesses orchestrating fake executors pass nil and stay
+	// byte-stable. A phase's degraded window was captured at ITS
+	// return boundary inside runCycle - a later clean phase cannot
+	// mask it - and the renderer refuses to merge windows into one
+	// verdict.
+	if obs != nil {
+		printRunEvidence(out, scenarioRuns(opts), *obs)
+	}
 	return exit
 }
 
@@ -747,6 +757,11 @@ func runScenarioRequest(lr lastRun, opts []plan.Options, cycles int, seed int64,
 	for i := range opts {
 		opts[i].PlanHash = planHash(lr, opts[i])
 	}
+	// R21: before the receipt this scenario arms displaces the previous
+	// unfinished attempt's evidence, state that evidence (and the OS's own
+	// unexpected-shutdown records, when local ones say something never
+	// ended). Silent, and System-log-free, on a clean start.
+	printPreviousAttemptWitness(os.Stdout)
 	if save {
 		if err := saveLastRun(lr); err != nil {
 			noteSaveFailure(err)
@@ -773,7 +788,8 @@ func runScenarioRequest(lr lastRun, opts []plan.Options, cycles int, seed int64,
 	currentEvents.emit("resolved", "", resolvedPayload{Runs: len(opts) * max(cycles, 1), PlanHashes: hashes}, false)
 	currentEvents.emit("started", "", startedPayload{Runs: len(opts) * max(cycles, 1), Cycles: max(cycles, 1)}, false)
 	execute, out := menuExecution(ui)
-	return runCycles(opts, cycles, seed, out, execute, continueOnFault, tr, st)
+	var obs []wheaObs
+	return runCycles(opts, cycles, seed, out, execute, continueOnFault, tr, st, &obs)
 }
 
 // scenarioRuns lists the log and journal each phase writes. Cycles
@@ -807,7 +823,7 @@ func cycleExit(results []plan.Result, stopped int, faulted map[int]bool) int {
 // and excluded from every later phase — the CoreCycler behavior of
 // "keep testing what still works". Aborts without faults (Ctrl+C, setup
 // errors) always stop the scenario.
-func runCycle(opts []plan.Options, out io.Writer, execute func(plan.Options) plan.Result, continueOnFault bool, faulted map[int]bool) (results []plan.Result, ran []bool, stopped int, stopMsg string) {
+func runCycle(opts []plan.Options, out io.Writer, execute func(plan.Options) plan.Result, continueOnFault bool, faulted map[int]bool, obs *[]wheaObs) (results []plan.Result, ran []bool, stopped int, stopMsg string) {
 	results = make([]plan.Result, len(opts))
 	ran = make([]bool, len(opts))
 	stopped = -1
@@ -869,6 +885,13 @@ func runCycle(opts []plan.Options, out io.Writer, execute func(plan.Options) pla
 		currentEvents.setPhase(phaseID)
 		currentEvents.emit("phase_started", phaseID, scenarioPhaseStartedPayload{Test: opt.TestName, A: opt.A, B: opt.B}, false)
 		res := execute(opt)
+		// R19: this phase's WHEA observation window closes HERE, at
+		// its own engine-return boundary. Capturing at the scenario
+		// tail instead would let one clean LAST phase hide an earlier
+		// degraded window (each phase runs under its own Guard), so
+		// every phase's state is attributed while it is still the
+		// truth about that phase.
+		captureWheaWindow(label, opt.PlanHash, obs)
 		results[i], ran[i] = res, true
 		emitPhaseResult(phaseID, res)
 		if res.Exit == 0 {

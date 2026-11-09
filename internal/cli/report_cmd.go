@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/weltercode/cpu-stability-checker/internal/config"
 	"github.com/weltercode/cpu-stability-checker/internal/human"
 	"github.com/weltercode/cpu-stability-checker/internal/journal"
 )
@@ -43,7 +42,12 @@ func reportCmd(args []string) int {
 		path = fs.Arg(0)
 	}
 	if path == "" {
-		path = journal.Path(config.Load(config.DefaultPath).LogFile)
+		p, err := configuredJournalPath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		path = p
 	}
 	recs, issA := journal.ReadAll(path)
 	if len(recs) == 0 && issA.ReadErr != "" {

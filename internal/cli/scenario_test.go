@@ -473,7 +473,7 @@ func TestRunCycles(t *testing.T) {
 			count++
 			return plan.Result{}
 		}
-		code := runCycles([]plan.Options{phase("a"), phase("b")}, 3, -1, &out, execute, false, nil, nil)
+		code := runCycles([]plan.Options{phase("a"), phase("b")}, 3, -1, &out, execute, false, nil, nil, nil)
 		if code != 0 {
 			t.Fatalf("runCycles() exit code = %d, want 0\n%s", code, out.String())
 		}
@@ -506,7 +506,7 @@ func TestRunCycles(t *testing.T) {
 				got = append(got, opt.Phase)
 				return plan.Result{}
 			}
-			runCycles(opts, 2, seed, io.Discard, execute, false, nil, nil)
+			runCycles(opts, 2, seed, io.Discard, execute, false, nil, nil, nil)
 			return got
 		}
 
@@ -535,7 +535,7 @@ func TestRunCycles(t *testing.T) {
 			}
 			return plan.Result{}
 		}
-		code := runCycles(opts, 2, -1, io.Discard, execute, true, nil, nil)
+		code := runCycles(opts, 2, -1, io.Discard, execute, true, nil, nil, nil)
 		if code != 1 {
 			t.Fatalf("runCycles() exit code = %d, want 1 (faults found)", code)
 		}
@@ -580,7 +580,7 @@ func TestRunCycles(t *testing.T) {
 			count++
 			return plan.Result{Exit: 1, Aborted: true, AbortMsg: "user interrupt"}
 		}
-		code := runCycles([]plan.Options{phase("a"), phase("b")}, 3, -1, &out, execute, true, nil, nil)
+		code := runCycles([]plan.Options{phase("a"), phase("b")}, 3, -1, &out, execute, true, nil, nil, nil)
 		if code != 1 {
 			t.Fatalf("runCycles() exit code = %d, want 1", code)
 		}

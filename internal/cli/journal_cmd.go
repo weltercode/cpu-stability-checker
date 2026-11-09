@@ -15,7 +15,12 @@ func journalCmd(args []string) int {
 		path = args[0]
 	}
 	if path == "" {
-		path = journal.Path(config.Load(config.DefaultPath).LogFile)
+		p, err := configuredJournalPath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		path = p
 	}
 	recs, iss := journal.ReadAll(path)
 	if len(recs) == 0 && iss.ReadErr != "" {
@@ -30,6 +35,18 @@ func journalCmd(args []string) int {
 	printJournalIssues(os.Stdout, iss)
 	journal.PrintReport(os.Stdout, reports)
 	return 0
+}
+
+// configuredJournalPath derives the journal path from the configured
+// log file. R15: a broken config makes the path UNKNOWN, so this is
+// an error to state, not a default to hide behind; an absent config
+// honestly means the default log file.
+func configuredJournalPath() (string, error) {
+	cfg, err := config.LoadOrDefault(config.DefaultPath)
+	if err != nil {
+		return "", fmt.Errorf("configuration error: %w (pass the journal file explicitly, or fix config.json)", err)
+	}
+	return journal.Path(cfg.LogFile), nil
 }
 
 // printJournalIssues states loudly what the journal could not tell us:

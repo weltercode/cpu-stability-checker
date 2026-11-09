@@ -40,7 +40,7 @@ func TestCatalogIntegrity(t *testing.T) {
 				t.Errorf("Category %q outside the menu sections", p.Category)
 			}
 			switch p.Visibility {
-			case Normal, Extended, Diagnostic:
+			case Normal, Diagnostic:
 			default:
 				t.Errorf("Visibility %q unknown", p.Visibility)
 			}
@@ -106,6 +106,7 @@ func TestCatalogIDsAreStable(t *testing.T) {
 		"diag-fault",
 		"mem-bandwidth", "mem-quick",
 		"mix-comprehensive", "mix-simultaneous", "mix-transitions-on-ram",
+		"quick-check",
 		"ram-address", "ram-constant", "ram-extended", "ram-moving", "ram-random",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -118,11 +119,9 @@ func TestCatalogIDsAreStable(t *testing.T) {
 // user list at all.
 func TestNormalListsStayHonest(t *testing.T) {
 	for _, cat := range []Category{CPU, RAM, MIX} {
-		for _, vis := range []Visibility{Normal, Extended} {
-			for _, p := range List(cat, vis) {
-				if p.Visibility == Diagnostic {
-					t.Errorf("%s/%s list contains diagnostic card %s", cat, vis, p.ID)
-				}
+		for _, p := range List(cat, Normal) {
+			if p.Visibility == Diagnostic {
+				t.Errorf("%s user list contains diagnostic card %s", cat, p.ID)
 			}
 		}
 	}
@@ -191,8 +190,8 @@ func TestCatalogNeedsMemory(t *testing.T) {
 
 func TestListOrderingIsDeterministic(t *testing.T) {
 	for _, cat := range []Category{CPU, RAM, MIX} {
-		a := List(cat, Extended)
-		b := List(cat, Extended)
+		a := List(cat, Normal)
+		b := List(cat, Normal)
 		if len(a) != len(b) {
 			t.Fatalf("List(%s) changed size between calls", cat)
 		}
@@ -202,9 +201,10 @@ func TestListOrderingIsDeterministic(t *testing.T) {
 			}
 		}
 	}
-	// Normal never shows more than Extended.
-	if len(List(CPU, Normal)) > len(List(CPU, Extended)) {
-		t.Error("Normal list is wider than Extended")
+	// The user list never exceeds the everything list: diagnostic
+	// cards may only ADD to a list, never replace or hide a card.
+	if len(List(CPU, Normal)) > len(List(CPU, Diagnostic)) {
+		t.Error("Normal list is wider than Diagnostic")
 	}
 }
 
