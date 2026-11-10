@@ -207,6 +207,13 @@ func sessionMenu(in *bufio.Reader, ui *screenUI, sessionID string, worst *int) i
 				note = ui.paint(tui.FGYellow, "Repeat unavailable: this session's manifest stores no request.")
 				continue
 			}
+			// R25: a history replay is a load too - the plan screen and
+			// an explicit yes come before anything is armed; a refusal
+			// leaves the repeat slot exactly as it was.
+			if !confirmRepeat(in, ui, m.Request) {
+				note = "Cancelled: nothing armed, no load started, the repeat slot keeps the previous test."
+				continue
+			}
 			if err := saveLastRun(*m.Request); err != nil {
 				// The replay slot must actually hold THIS request
 				// before repeating: replaying the stale slot would

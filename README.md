@@ -29,6 +29,9 @@ What the tool can already do:
 - one-process-per-core execution and Windows Job Object cleanup;
 - multi-phase scenarios, repeatable requests, JSONL events, crash journals,
   history, and reports;
+- a task menu that greets you with the same items every start and never
+  starts a load without showing its plan and taking an explicit yes — the
+  saved-test repeat and the history replay go through that same confirm;
 - `burst`, `pairs`, `curve`, and physical-core `cycle` generators;
 - prepared idle/load sessions and shared-memory ownership handoff;
 - WHEA and temperature monitoring with explicit degraded/unavailable states,
@@ -46,7 +49,7 @@ What the tool can already do:
 - a recoverable Curve Optimizer transaction layer and fake-only automatic
   tuning.
 
-This is an experimental preview (this tag is `v0.1.2`), not a finished
+This is an experimental preview (this tag is `v0.1.3`), not a finished
 release. The open gaps are:
 
 - the park/wake hypothesis: prepared transitions can now OBSERVE and journal
@@ -158,7 +161,9 @@ contract was not confirmed, including zero verified checks) — each carrying
 its structured reason. `UNKNOWN` belongs only to a missing, corrupt or foreign
 result record. Monitoring states stay honest: WHEA claims coverage only after
 completed query cycles ("`WHEA ?`" until then), and a missing temperature
-provider is named as monitoring state, not as a fault.
+provider is named as monitoring state, not as a fault — the live panel keeps
+such states to one short phrase, and the full verbatim reason for every
+source is in `caps` (the menu runs the same probe list under Diagnostics).
 
 When every logical CPU is a worker, the helper threads (watchdog, journal
 writer, live panel) have no CPU of their own and compete with workers pinned
@@ -276,14 +281,19 @@ builds the shareable folder.
 
 A silent freeze with no dump leaves a specific shape behind: the receipt stays
 "pending", session manifests stay "running", and journal recovery names the
-cores that started and never reported an ending. The next start notices that
-before it overwrites any of it, and shows the story itself: which record
-never finished, what each journal recovered, and what the OS log answers
-(the unexpected-shutdown records Kernel-Power 41 / EventLog 6008 are shown as
-time candidates only — they are written by the later boot, the tool keeps no
-boot boundaries and names no cause). The unfinished attempt is reported
-`INCOMPLETE` with the start time. A readable log that shows no such record is
-never read as "the end was clean."
+cores that started and never reported an ending. The tool reads that evidence
+before it overwrites any of it, and it never loses the story. The interactive
+menu always greets you with its normal items and carries the unfinished
+evidence as a red "View findings" item with an unread count; the inbox lists
+it newest first as "datetime - test type - finding", and its read/dismiss
+actions change only the notification - journals, manifests and receipts on
+disk are never rewritten. Scripted entry points print the full witness block
+right before a new attempt could displace the pending record. Both shapes
+state the same honesty: the unfinished attempt is `INCOMPLETE` with its start
+time, the unexpected-shutdown records (Kernel-Power 41 / EventLog 6008) are
+shown as time candidates only — they are written by the later boot, the tool
+keeps no boot boundaries and names no cause — and a readable log that shows
+no such record is never read as "the end was clean."
 
 ## Sharing evidence
 

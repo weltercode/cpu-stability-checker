@@ -60,25 +60,26 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 	if _, statErr := os.Stat(config.DefaultPath); os.IsNotExist(statErr) {
 		note = "config.json: not found — defaults are in effect ('config init' writes one)."
 	}
-	// R21: if a previous attempt left unfinished durable evidence, the
-	// first frame says so BEFORE any action can overwrite it (the repeat
-	// path would otherwise arm its receipt straight away). Same block the
-	// scripted entries print, once per piece of evidence per process.
-	var witnessLines []string
-	if ws := previousAttemptWitnessText(); ws != nil {
-		witnessLines = ws
-	}
+	// R24 (owner UX contract 2026-11-10): the menu screen never greets
+	// the operator with witness text - the greeting wall made a working
+	// tool look broken ("полная хрень", owner's live run). Unfinished
+	// evidence is PRESENCE, carried by the red "7) View findings" item on
+	// every frame: exactly what the contract asks for ("показать просто
+	// наличием красного пункта меню"). R21's tell-before-overwrite
+	// invariant is kept in menu-quiet form: witnessMenuQuiet makes
+	// printPreviousAttemptWitness - called at every arm point, before any
+	// receipt is displaced - speak one compact line instead of the block,
+	// and R25's confirm screen states the unfinished-findings count
+	// BEFORE this attempt arms anything. Scripted entry points keep the
+	// full block byte-identical: the contract change belongs to the
+	// interactive user, the machine-facing pinned wording stays.
+	witnessMenuQuiet = true
 	worst := 0
 	for {
 		lines := menuLines(ui)
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
-		}
-		if witnessLines != nil {
-			lines = append(lines, "")
-			lines = append(lines, witnessLines...)
-			witnessLines = nil
 		}
 		ui.screenPrompt(lines, "Action [1]: ")
 
@@ -104,8 +105,23 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 
 		switch choice {
 		case "1":
+			// R25 (owner UX contract 2026-11-10): neither item 1 nor
+			// Enter may start a load without the plan screen and an
+			// explicit yes - the crash-loop one-keystroke repeat met a
+			// real user as an unrequested all-core machine load. The
+			// scripted 'repeat' command keeps its no-questions replay
+			// (crash-loop contract); only the menu path confirms.
+			lr, err := loadLastRun()
+			if err != nil {
+				note = ui.paint(tui.FGBrightRed, "No previous run to repeat - start one test once and the menu remembers it here.")
+				continue
+			}
+			if !confirmRepeat(in, ui, lr) {
+				note = "Cancelled: nothing armed, no load started."
+				continue
+			}
 			before := lastAttemptID()
-			code := repeatLastRunWithUI(ui)
+			code := runLastRun(lr, ui)
 			if stop, exit := menuRunOutcome(in, ui, &worst, code, before); stop {
 				return menuStopExit(in, ui, exit, before)
 			}
@@ -139,10 +155,18 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 			if code := settingsMenu(in, ui, cfg, &worst); code != 0 {
 				return code
 			}
+		case "7":
+			// R24: the findings inbox behind the red menu item - the
+			// list is formatted, newest first; reading, marking read or
+			// dismissing here changes notification flags only, never
+			// the journals, manifests or receipts on disk.
+			if code := findingsMenu(in, ui); code != 0 {
+				return code
+			}
 		case "0", "q", "quit":
 			return worst
 		default:
-			bad := "Enter a number from 1 to 6, or 0 to quit."
+			bad := "Enter a number from 1 to 7, or 0 to quit."
 			if ui.hasScreen() {
 				note = ui.paint(tui.FGBrightRed, bad)
 			} else {
@@ -374,6 +398,7 @@ func menuLines(ui *screenUI) []string {
 		"",
 		"  5) Session history and reports",
 		"  6) Settings",
+		findingsMenuItem(ui),
 		"  0) Quit",
 	)
 }
@@ -383,6 +408,38 @@ func menuLines(ui *screenUI) []string {
 func hasSavedRecipe() bool {
 	_, err := loadLastRun()
 	return err == nil
+}
+
+// confirmRepeat is R25 (owner UX contract 2026-11-10): no load starts
+// from the menu without a plan screen and an explicit yes - item 1,
+// Enter and the history replay all pass through here. The screen shows
+// what exactly will run (the same summary line the menu shows), the
+// last recorded outcome, and the unfinished-findings count: R21's
+// tell-before-overwrite signal stated BEFORE anything can arm a
+// receipt. Refusing (anything but y/yes, including EOF) changes
+// nothing: no receipt armed, no slot rewritten, no load started.
+func confirmRepeat(in *bufio.Reader, ui *screenUI, lr *lastRun) bool {
+	lines := []string{
+		"--- Repeat the last test: the plan before any load ---",
+		"  " + recipeSummaryLine(lr),
+	}
+	if text, code := outcomeSummary(lr); text != "" {
+		lines = append(lines, "  last recorded outcome: "+ui.paint(code, text))
+	}
+	if items := scanFindings(); len(items) > 0 {
+		lines = append(lines,
+			"",
+			fmt.Sprintf("  unfinished evidence from previous attempt(s): %d - under menu item 7 'View findings'.", len(items)),
+			"  Starting arms a new attempt record; the unfinished records are NOT rewritten and this tool still claims no cause for them.")
+	}
+	lines = append(lines,
+		"",
+		"Starting puts this machine under load.",
+		"Start this run? [y/N]: ")
+	ui.screenPrompt(lines, "Start this run? [y/N]: ")
+	line, _ := in.ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
 }
 
 // recipeSummaryLine is the compact "what will replay" line. It states

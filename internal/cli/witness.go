@@ -58,29 +58,58 @@ const witnessShutdownRecords = 10
 // unfinished evidence shows again.
 var witnessShownMarker string
 
+// witnessMenuQuiet marks the interactive-menu process (R24, owner UX
+// contract 2026-11-10): the menu screen NEVER greets the operator with
+// the full witness block - findings presence is carried by the always
+// visible 'View findings' menu item (red when unread), and at the arm
+// moment (after the plan/confirm) this one-liner speaks BEFORE the
+// pending evidence is displaced, naming what exists, stating nothing
+// was changed, and pointing at the full story. The scripted entry
+// points keep the full block byte-identical: the contract change
+// belongs to the interactive user, and the pinned machine-facing
+// wording stays.
+var witnessMenuQuiet = false
+
+// witnessMenuCounts names the unfinished local records in one line
+// (never a cause, never a machine verdict).
+func witnessMenuCounts(ev unfinishedEvidence) string {
+	names := []string{}
+	if ev.pending != nil {
+		names = append(names, fmt.Sprintf("pending attempt record %s", ev.pending.AttemptID))
+	}
+	if n := len(ev.running); n > 0 {
+		names = append(names, fmt.Sprintf("%d unfinished session manifest(s)", n))
+	}
+	return strings.Join(names, ", ")
+}
+
 // printPreviousAttemptWitness is the scripted-entry variant: it prints the
 // block (prefixed by a blank line) exactly where an entry point is about
 // to arm its attempt, and prints nothing - at zero query cost - when
-// nothing unfinished is observable.
+// nothing unfinished is observable. In the menu process it prints the
+// compact one-liner instead (witnessMenuQuiet), with the same
+// once-per-evidence marker: before any arm the evidence is always named.
 func printPreviousAttemptWitness(out io.Writer) {
+	if witnessMenuQuiet {
+		ev := collectUnfinished()
+		if ev.pending == nil && len(ev.running) == 0 {
+			return
+		}
+		sort.Strings(ev.markerIDs)
+		marker := strings.Join(ev.markerIDs, ";")
+		if marker == witnessShownMarker {
+			return
+		}
+		witnessShownMarker = marker
+		fmt.Fprintf(out, "\nUnfinished evidence from a previous attempt is present: %s. This attempt changed nothing and claims no cause: the verdict stands INCOMPLETE, the records are listed under menu 'View findings', and 'journal <file>' / 'report' render the full story.\n", witnessMenuCounts(ev))
+		return
+	}
 	block, marker := previousAttemptWitness()
 	if block == "" || marker == witnessShownMarker {
 		return
 	}
 	witnessShownMarker = marker
 	fmt.Fprint(out, "\n"+block)
-}
-
-// previousAttemptWitnessText is the menu variant: the block split into
-// lines the first screen frame can show, or nil when there is nothing to
-// say (same once-per-evidence marker).
-func previousAttemptWitnessText() []string {
-	block, marker := previousAttemptWitness()
-	if block == "" || marker == witnessShownMarker {
-		return nil
-	}
-	witnessShownMarker = marker
-	return strings.Split(strings.TrimRight(block, "\n"), "\n")
 }
 
 // unfinishedEvidence is what the local durable records admit about the
@@ -94,10 +123,12 @@ type unfinishedEvidence struct {
 	maxBeat   time.Time // latest core beat among recovered crashed cores (zero = none seen)
 }
 
-// previousAttemptWitness collects the whole witness from local durable
-// records first and the System log second, and renders it as one block.
-// Returns ("", "") when a clean start shows nothing unfinished.
-func previousAttemptWitness() (string, string) {
+// collectUnfinished gathers the LOCAL durable evidence only (pending
+// receipt, running manifests, marker ids, earliest readable start):
+// cheap enough for a per-frame menu count and the compact line, and
+// with zero journal reads and zero System-log queries. A clean start
+// returns a zero evidence with both lists empty.
+func collectUnfinished() unfinishedEvidence {
 	ev := unfinishedEvidence{}
 	r, rerr := loadLastResult()
 	if rerr == nil && r.State == receiptPending {
@@ -118,6 +149,14 @@ func previousAttemptWitness() (string, string) {
 			ev.earliest = t
 		}
 	}
+	return ev
+}
+
+// previousAttemptWitness collects the whole witness from local durable
+// records first and the System log second, and renders it as one block.
+// Returns ("", "") when a clean start shows nothing unfinished.
+func previousAttemptWitness() (string, string) {
+	ev := collectUnfinished()
 	if ev.pending == nil && len(ev.running) == 0 {
 		return "", ""
 	}

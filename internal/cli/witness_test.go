@@ -25,18 +25,22 @@ import (
 // query acceptance lives in the whea package's named real-log test.
 
 // setWitnessSeam swaps the shutdown-record seam (and resets the
-// once-per-evidence marker) for one test, restoring both after.
+// once-per-evidence marker) for one test, restoring both after. R24
+// added witnessMenuQuiet: these tests pin the SCRIPTED full-block
+// contract, so the seam helper also forces the menu-quiet flag off -
+// menuLoop tests run earlier in the same package and must not leak it.
 func setWitnessSeam(t *testing.T, fn func(limit int) ([]whea.Event, error)) *int {
 	t.Helper()
-	prevFn, prevMarker := shutdownRecordsQuery, witnessShownMarker
+	prevFn, prevMarker, prevQuiet := shutdownRecordsQuery, witnessShownMarker, witnessMenuQuiet
 	calls := 0
 	shutdownRecordsQuery = func(limit int) ([]whea.Event, error) {
 		calls++
 		return fn(limit)
 	}
 	witnessShownMarker = ""
+	witnessMenuQuiet = false
 	t.Cleanup(func() {
-		shutdownRecordsQuery, witnessShownMarker = prevFn, prevMarker
+		shutdownRecordsQuery, witnessShownMarker, witnessMenuQuiet = prevFn, prevMarker, prevQuiet
 	})
 	return &calls
 }
@@ -488,5 +492,60 @@ func TestRunCmdWitnessBeforeArming(t *testing.T) {
 	}
 	if r.State != receiptFinal || r.RecipeID == "recipe-dead" {
 		t.Errorf("receipt after the run = state %q recipe %q, want a final receipt of the new attempt", r.State, r.RecipeID)
+	}
+}
+
+// TestMenuQuietWitnessCompactLine pins R24's menu-side witness (owner
+// UX contract 2026-11-10): in the menu process the arm-moment
+// statement is ONE compact line - it names the pending record and the
+// unfinished manifests, keeps INCOMPLETE and the no-cause bound,
+// points at 'View findings', fires once per piece of evidence, and
+// queries the System log ZERO times (the OS story is asked for only
+// deliberately, inside one finding's detail). The scripted full block
+// stays byte-identical: every test above pins it, and setWitnessSeam
+// forces the quiet flag off for them.
+func TestMenuQuietWitnessCompactLine(t *testing.T) {
+	chdirTemp(t)
+	useScratchReceipt(t)
+	witnessMenuQuiet = false
+	calls := setWitnessSeam(t, func(int) ([]whea.Event, error) {
+		t.Error("the menu-quiet witness must never query the System log")
+		return nil, nil
+	})
+	writeManifestFixture(t, sessionManifest{Version: manifestVersion,
+		SessionID: "2026-11-09T12-00-00Z-deadbeef", Kind: "run",
+		Started: "2026-11-09T12:00:00Z", State: manifestRunning})
+	armPendingReceipt(t, "recipe-mq", []string{"mq.log"}, []string{"hash-mq"})
+	witnessMenuQuiet = true
+
+	var out strings.Builder
+	printPreviousAttemptWitness(&out)
+	printPreviousAttemptWitness(&out)
+	text := out.String()
+	for _, want := range []string{
+		"Unfinished evidence from a previous attempt is present:",
+		"pending attempt record",
+		"1 unfinished session manifest(s)",
+		"INCOMPLETE",
+		"claims no cause",
+		"View findings",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("compact witness missing %q:\n%s", want, text)
+		}
+	}
+	for _, ban := range []string{
+		"What this block does NOT say",
+		"The previous attempt never reported an ending. This tool reads its own durable records",
+	} {
+		if strings.Contains(text, ban) {
+			t.Errorf("compact witness recites the wall (%q):\n%s", ban, text)
+		}
+	}
+	if n := strings.Count(text, "Unfinished evidence from a previous attempt is present"); n != 1 {
+		t.Errorf("compact witness fired %d times for one evidence set, want exactly once:\n%s", n, text)
+	}
+	if *calls != 0 {
+		t.Errorf("menu-quiet witness queried the System log %d times, want zero", *calls)
 	}
 }

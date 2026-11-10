@@ -219,10 +219,14 @@ func temperatureLines(s Snapshot) []string {
 	if t.LimitC > 0 {
 		control += fmt.Sprintf(" (%.1f°C)", t.LimitC)
 	}
+	// R26 (owner UX contract 2026-11-10): the live panel states the
+	// monitoring CONDITION, it does not recite the error report - the
+	// full HWiNFO reason printed mid-run read as an error inside the
+	// body of the test. "sensor unavailable" is the state and it is
+	// never hidden; the full verbatim reason for every source lives in
+	// Diagnostics -> "Telemetry capabilities" (caps probes print each
+	// reason) and in the run report.
 	sensor := "sensor unavailable"
-	if t.Reading.Source == "" && t.Reason != "" {
-		sensor += ": " + t.Reason
-	}
 	if t.Reading.Source != "" {
 		sensor = "sensor " + t.Reading.Source + ": " + t.Reading.Sensor
 		if !t.Known {

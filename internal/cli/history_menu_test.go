@@ -36,26 +36,38 @@ func TestHistoryMenuListsAndReports(t *testing.T) {
 		Kind: "session", Started: "2026-10-16T10:00:00Z", State: manifestRunning}); err != nil {
 		t.Fatal(err)
 	}
-	// R21: this fixture carries a session manifest stuck "running" - the
-	// hard-lockup witness fires on menu open. Keep the System-log seam
-	// hermetic and answer "clean and empty" (the absence branch).
+	// R24 (owner UX contract 2026-11-10): this fixture carries a session
+	// manifest stuck "running" - the menu no longer recites the witness
+	// wall at open (that wall was the named defect). Presence shows as
+	// the red findings item, and the full honest story is inside the
+	// inbox detail. The System-log seam stays hermetic and answers
+	// "clean and empty" (the absence branch) for the detail.
 	setWitnessSeam(t, func(int) ([]whea.Event, error) { return nil, nil })
 
 	out := captureStdoutAndRun(t, func() {
-		if code := menuLoop(bufio.NewReader(strings.NewReader("5\n1\n1\n\nq\nq\n0\n")), config.Default()); code != 0 {
+		// "7" = View findings inbox, "1" = open the stuck session's
+		// detail, q back to list, q back to the menu; then the history
+		// walk as before.
+		if code := menuLoop(bufio.NewReader(strings.NewReader("7\n1\nq\nq\n5\n1\n1\n\nq\nq\n0\n")), config.Default()); code != 0 {
 			t.Errorf("menu exit = %d, want 0", code)
 		}
 	})
-	// R21 acceptance: the crashed session is shown by the tool ITSELF at
-	// menu open - no one asked for 'journal <file>' here.
+	// R24 acceptance: findings presence is carried by the menu item
+	// (count in the TEXT, newest-first list, datetime · type · finding),
+	// and the detail keeps the honesty lines - while the greeting never
+	// prints the witness block.
 	for _, want := range []string{
-		"never reported an ending. This tool reads its own durable records",
-		"session manifest " + oldID,
+		"7) View findings - 1 unread unfinished attempt(s)",
+		"2026-10-16 10:00Z · session · state still \"running\"",
+		"finding: session:" + oldID,
 		"does NOT mean the end was clean",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("menu-open hard-lockup witness missing %q:\n%s", want, out)
+			t.Errorf("findings inbox contract broken, missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "never reported an ending. This tool reads its own durable records") {
+		t.Errorf("the menu greeted the operator with the witness wall again:\n%s", out)
 	}
 	for _, want := range []string{
 		"--- Session history ---",
@@ -69,10 +81,10 @@ func TestHistoryMenuListsAndReports(t *testing.T) {
 		}
 	}
 	// Newest-first is a property of the HISTORY SCREEN, compared within
-	// it: since R21 the first menu frame may legitimately name an
-	// unfinished older session BEFORE the history screen is ever opened.
-	// ("Session history and reports" is a menu item title; the screen's
-	// own banner is the anchor.)
+	// it: the findings screen (opened before history in this script)
+	// also names the unfinished session, so the history banner anchors
+	// the comparison. ("Session history and reports" is a menu item
+	// title; the screen's own banner is the anchor.)
 	hs := strings.Index(out, "--- Session history ---")
 	if hs < 0 {
 		t.Fatal("history screen never appeared")
@@ -190,7 +202,9 @@ func TestHistoryMenuReplayRunsAsNewSession(t *testing.T) {
 	}
 
 	out := captureStdoutAndRun(t, func() {
-		menuLoop(bufio.NewReader(strings.NewReader("5\n1\n3\nq\nq\n0\n")), config.Default())
+		// R25: the replay is a load - the plan screen asks for an
+		// explicit yes before anything arms, so the script answers y.
+		menuLoop(bufio.NewReader(strings.NewReader("5\n1\n3\ny\nq\nq\n0\n")), config.Default())
 	})
 	if !strings.Contains(out, "Starting session") {
 		t.Errorf("the replay never started a session:\n%s", out)
@@ -210,6 +224,45 @@ func TestHistoryMenuReplayRunsAsNewSession(t *testing.T) {
 	}
 	if list[0].RecipeID != "recipe-hist" || list[0].Kind != "session" {
 		t.Errorf("the replay session manifest lost its binding: %+v", list[0])
+	}
+}
+
+// R25 (owner UX contract 2026-11-10): a history replay is a load too.
+// The plan screen with an explicit [y/N] comes BEFORE anything arms;
+// Enter (the default answer) is NOT consent - nothing starts, the
+// repeat slot is never written, and no new session manifest appears.
+func TestHistoryReplayRefusedWithoutExplicitYes(t *testing.T) {
+	chdirTemp(t)
+	useScratchReceipt(t)
+	req := &lastRun{Kind: lastRunSession, RecipeID: "recipe-refused",
+		Session: &SessionOptions{Mode: sessionAllCore, PhysicalCores: []int{0},
+			Workload: "int", ThreadsPerCore: 1, Duration: 50 * time.Millisecond,
+			Passes: 1, LogFile: "rr.log"},
+		Config: &config.Config{}}
+	if err := saveSessionManifest(&sessionManifest{Version: manifestVersion,
+		SessionID: "20260101-000001-0000000000000000", Kind: "session",
+		Started: "2026-01-01T00:00:00Z", State: "completed",
+		Validation: string(plan.ValVerified), RecipeID: "recipe-refused", Request: req}); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdoutAndRun(t, func() {
+		menuLoop(bufio.NewReader(strings.NewReader("5\n1\n3\n\nq\nq\n0\n")), config.Default())
+	})
+	if !strings.Contains(out, "Start this run? [y/N]") {
+		t.Errorf("the replay had no plan/confirm screen:\n%s", out)
+	}
+	if !strings.Contains(out, "Cancelled: nothing armed, no load started") {
+		t.Errorf("the refusal did not say what it did not do:\n%s", out)
+	}
+	if strings.Contains(out, "Starting session") {
+		t.Errorf("Enter at the plan prompt started a load:\n%s", out)
+	}
+	if _, err := loadLastRun(); err == nil {
+		t.Error("the refused replay armed the repeat slot")
+	}
+	list, _ := listSessionManifests()
+	if len(list) != 1 {
+		t.Errorf("refused replay added %d history entries, want the original only", len(list))
 	}
 }
 

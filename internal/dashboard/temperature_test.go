@@ -61,10 +61,19 @@ func TestPanelUsesTheCutoffObservationAndClearsStaleTemperature(t *testing.T) {
 	t.Fatal("panel did not show loss of readings")
 }
 
-func TestUnavailableTemperatureShowsDiagnosticReason(t *testing.T) {
+// R26 (owner UX contract 2026-11-10): the live panel carries states,
+// not error reports - "sensor unavailable" is the state phrase and the
+// reason must NEVER be recited mid-run (the owner saw the HWiNFO pipe
+// error wall inside a running test). The full reason stays honest
+// where it is read deliberately: Diagnostics -> Telemetry capabilities
+// and the run report.
+func TestUnavailableTemperaturePanelStaysCondensed(t *testing.T) {
 	s := Snapshot{Temperature: temperature.Status{State: temperature.Off, Reason: "HWiNFO: enable Shared Memory Support"}}
 	text := strings.Join(Render(s, 4), "\n")
-	if !strings.Contains(text, "control off") || !strings.Contains(text, "Shared Memory Support") {
-		t.Fatalf("missing unavailable explanation: %s", text)
+	if !strings.Contains(text, "control off") || !strings.Contains(text, "sensor unavailable") {
+		t.Fatalf("missing condensed unavailable state: %s", text)
+	}
+	if strings.Contains(text, "Shared Memory Support") {
+		t.Fatalf("panel recites the reason wall mid-run: %s", text)
 	}
 }
