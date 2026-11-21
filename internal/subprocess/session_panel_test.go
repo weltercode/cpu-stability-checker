@@ -103,7 +103,7 @@ func TestSessionReportIsOneWrite(t *testing.T) {
 	jw.Close()
 
 	var cw countingWriter
-	writeSessionReport(&cw, jp, []int{0}, []SessionOutcome{{BurstsDone: 2, BurstsTried: 2, Exit: 0}}, "")
+	writeSessionReport(&cw, jp, []int{0}, []SessionOutcome{{BurstsDone: 2, BurstsTried: 2, Exit: 0}}, "", "")
 	if cw.writes != 1 {
 		t.Errorf("summary+report took %d writes, want 1 (the old line-by-line report was the flicker storm)", cw.writes)
 	}

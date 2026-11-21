@@ -70,6 +70,12 @@ func TestExecuteSwitchE2E(t *testing.T) {
 	if res.Validation != plan.ValVerified {
 		t.Errorf("validation = %s, want verified (every turn closed and verified, parking off)", res.Validation)
 	}
+	// R34 (honesty of absence): this fixture plans no memory budget,
+	// so no participant opened an engine and no mem_done exists - the
+	// live fold must stay NIL, never an empty block of zeros.
+	if res.Coverage.Mem != nil {
+		t.Errorf("engine-less switch grew a mem block: %+v, want nil (absence = not observed)", res.Coverage.Mem)
+	}
 
 	rep := readRecoveredRun(t, jp)
 	if rep.SwitchSchedule == nil || len(rep.SwitchSchedule.Turns) != 4 {

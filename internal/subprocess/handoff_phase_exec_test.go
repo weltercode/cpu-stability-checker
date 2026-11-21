@@ -47,6 +47,17 @@ func TestHandoffPhaseResultClean(t *testing.T) {
 	if res.Validation != plan.ValVerified {
 		t.Errorf("validation = %q, want verified (every block re-read independently)", res.Validation)
 	}
+	// R34: handoff participants open the shared engine and journal
+	// their own mem_done before core_done - the live fold must show
+	// BOTH slots (the aggregated verdict unit above stays exactly as
+	// it was; the accounting folds by the planned participant count).
+	if res.Coverage.Mem == nil {
+		t.Fatal("handoff workers journaled mem_done but the live fold is absent")
+	}
+	if res.Coverage.Mem.EngineSlots != 2 || res.Coverage.Mem.UnknownSlots != 0 {
+		t.Errorf("handoff mem fold slots = %d/%d, want 2/0 (both participants accounted)",
+			res.Coverage.Mem.EngineSlots, res.Coverage.Mem.UnknownSlots)
+	}
 	if len(stream) != 8 {
 		t.Errorf("OnLease deliveries = %d, want 8 (the phase path wires the S4 stream too)", len(stream))
 	}

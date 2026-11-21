@@ -59,14 +59,20 @@ type lastResult struct {
 	// never re-guesses, and a known non-zero exit can never render as
 	// "unknown" while a reason exists. Older receipts lack the field
 	// - the reader rebuilds the verdict from the fields they do have.
-	Verdict       string   `json:"verdict,omitempty"`
-	VerdictReason string   `json:"verdict_reason,omitempty"`
-	RunsPlanned   int      `json:"runs_planned,omitempty"`  // slots the attempt intended to run
-	RunsFinished  int      `json:"runs_finished,omitempty"` // slots that reached a terminal Result
-	Findings      int      `json:"findings,omitempty"`      // observed findings across all runs
-	AbortMsg      string   `json:"abort_msg,omitempty"`     // first non-empty stop reason
-	Logs          []string `json:"logs,omitempty"`          // the attempt's actual log paths
-	PlanHashes    []string `json:"plan_hashes,omitempty"`   // experiment identities this attempt ran
+	Verdict       string `json:"verdict,omitempty"`
+	VerdictReason string `json:"verdict_reason,omitempty"`
+	RunsPlanned   int    `json:"runs_planned,omitempty"`  // slots the attempt intended to run
+	RunsFinished  int    `json:"runs_finished,omitempty"` // slots that reached a terminal Result
+	Findings      int    `json:"findings,omitempty"`      // observed findings across all runs
+	AbortMsg      string `json:"abort_msg,omitempty"`     // first non-empty stop reason
+	// Mem is the attempt's folded memory-engine accounting (R29):
+	// the children's own mem_done facts, summed per run over their
+	// slots. Absent = no run reported engine accounting (unknown -
+	// NOT "the engine touched nothing"). Cumulative byte-work, not a
+	// unique physical-RAM coverage claim.
+	Mem        *plan.RAMTotals `json:"mem,omitempty"`
+	Logs       []string        `json:"logs,omitempty"`        // the attempt's actual log paths
+	PlanHashes []string        `json:"plan_hashes,omitempty"` // experiment identities this attempt ran
 }
 
 // Severity orders for aggregation: the attempt's label is the WORST
@@ -140,6 +146,12 @@ func (tr *attemptReceipt) finish(exit int, results []plan.Result) {
 		tr.r.AbortMsg = abort
 	}
 	tr.r.RunsFinished = len(results)
+	// R29: fold the runs' memory-engine accounting into the durable
+	// receipt. Nil stays absent (not observed) - never a zeroed-out
+	// claim - and the cumulative labeling lives in the type's own
+	// field names, so the receipt can't drift into promising
+	// physical-RAM coverage.
+	tr.r.Mem = plan.CombineRAM(results)
 	// The P13 word: fold every observed run's structured verdict into
 	// the attempt's word (FAIL > INCOMPLETE > UNVERIFIED > PASS), and
 	// stamp it beside the exit code so no reader ever has to guess
@@ -154,6 +166,11 @@ func (tr *attemptReceipt) finish(exit int, results []plan.Result) {
 	tr.r.Exit = &exit
 	tr.r.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	tr.save("finalized")
+	// R39c: the per-profile landmark rides the SAME finalize point as
+	// the receipt (attribution through the recipe binding, honest
+	// absence for unattributable attempts; a failed landmark write is
+	// a warning and never touches the verdict).
+	recordObservation(tr.r)
 }
 
 // worstOutcome aggregates child-run outcomes the way the receipt

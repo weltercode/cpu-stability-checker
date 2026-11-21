@@ -176,6 +176,18 @@ func TestRunDetailsAndProvenance(t *testing.T) {
 	if details[0].Cores[0].Mem == nil {
 		t.Fatal("run r1 core mem must be present")
 	}
+	// R29: the per-run rollup - one cumulative fold per run, kept
+	// strictly per-run (the envelope never sums across runs), and
+	// absent (not zeros) for a run whose slots reported nothing.
+	if details[0].Mem == nil {
+		t.Fatal("run r1 must carry the per-run memory rollup")
+	}
+	if details[0].Mem.EngineSlots != 1 || details[0].Mem.Requested != 1<<20 || details[0].Mem.LastPass != 1<<20 {
+		t.Errorf("r1 rollup = %+v, want 1 slot / 1MiB requested / 1MiB last-pass floor", details[0].Mem)
+	}
+	if details[1].Mem != nil {
+		t.Errorf("run r2 has no accounting and must render no rollup block (unknown), got %+v", details[1].Mem)
+	}
 	if details[1].Meta != nil {
 		t.Error("run r2 provenance must be nil (unknown), not fabricated")
 	}

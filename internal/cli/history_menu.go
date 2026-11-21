@@ -17,8 +17,10 @@ import (
 // historyMenu is menu item 5 (U02): the recent sessions read from
 // their manifests - not from whatever journal happens to be current
 // - and every action here is read-only until the user explicitly
-// asks for a replay. Reading history never rewrites a manifest and
-// never deletes a file (menu plan section 6).
+// asks for a replay, or names the exact word that confirms the ONE
+// destructive action this screen offers (R37: the owner named history
+// cleanup as a deliberate, confirmed choice - reading history still
+// never rewrites or deletes anything by itself).
 const historyShow = 10 // the acceptance line: the last 10 sessions are visible
 
 func historyMenu(in *bufio.Reader, ui *screenUI, worst *int) int {
@@ -29,32 +31,33 @@ func historyMenu(in *bufio.Reader, ui *screenUI, worst *int) int {
 		if len(shown) > historyShow {
 			shown = shown[:historyShow]
 		}
-		lines := []string{"--- Session history ---", "  (each line starts with the local start time; session ids stay UTC)"}
+		lines := []string{tx("--- Session history ---"), tx("  (each line starts with the local start time; session ids stay UTC)")}
 		for i, m := range shown {
 			lines = append(lines, fmt.Sprintf("  %d) %s", i+1, sessionHistoryLine(ui, m)))
 		}
 		if len(list) > historyShow {
-			lines = append(lines, fmt.Sprintf("  showing %d of %d", historyShow, len(list)))
+			lines = append(lines, fmt.Sprintf(tx("  showing %d of %d"), historyShow, len(list)))
 		}
 		if len(list) == 0 {
-			lines = append(lines, "  No sessions yet: run a test and it will appear here.")
+			lines = append(lines, tx("  No sessions yet: run a test and it will appear here."))
 		}
-		lines = append(lines, "", "  j) Report on the current journal (every run in it)", "  q) Back to the main menu")
+		lines = append(lines, "", tx("  j) Report on the current journal (every run in it)"),
+			tx("  c) Clear ALL history: every record plus its log/journal/fragment files (asks for the exact word)"),
+			tx("  q) Back to the main menu"))
 		for _, w := range warns {
 			// A corrupt manifest gets its own loud line; the rest of
 			// history stays listed (section 6: one bad entry never
 			// breaks the list).
-			lines = append(lines, ui.paint(tui.FGYellow, "  notice: "+w))
+			lines = append(lines, ui.paint(tui.FGYellow, tx("  notice: ")+w))
 		}
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Action [q]: ")
+		ui.screenPrompt(lines, tx("Action [q]: "))
 
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
+		choice, eof := navChoice(in, ui, lines, tx("Action [q]: "), "q")
+		if eof {
 			fmt.Println()
 			return 0
 		}
@@ -65,10 +68,37 @@ func historyMenu(in *bufio.Reader, ui *screenUI, worst *int) int {
 			fmt.Println()
 			reportCmd(nil)
 			ui.waitForEnter(in)
+		case choice == "c":
+			// R37: the one destructive screen. Preview first, then
+			// the exact word - an accidental keystroke must never
+			// empty history, so 'y' is NOT enough: the operator types
+			// "clear" itself. Anything else, EOF included, cancels
+			// without touching a byte.
+			fmt.Println()
+			rr := clearHistory(true)
+			if rr.records == 0 && rr.unreadable == 0 {
+				fmt.Println(tx("Nothing recorded: history is already empty."))
+				ui.waitForEnter(in)
+				continue
+			}
+			for _, l := range clearPreview(rr) {
+				fmt.Println(l)
+			}
+			fmt.Print(tx("Type the word clear to remove everything; anything else cancels: "))
+			confirm, cerr := in.ReadString('\n')
+			if cerr != nil {
+				fmt.Println()
+			}
+			if strings.ToLower(strings.TrimSpace(confirm)) == "clear" && cerr == nil {
+				res := clearHistory(false)
+				note = strings.Join(clearSummary(res), "\n")
+			} else {
+				note = tx("cancelled: nothing was removed.")
+			}
 		default:
 			idx, err := strconv.Atoi(choice)
 			if err != nil || idx < 1 || idx > len(shown) {
-				bad := fmt.Sprintf("Enter a number from 1 to %d, j or q.", len(shown))
+				bad := fmt.Sprintf(tx("Enter a number from 1 to %d, j or q."), len(shown))
 				note = ui.paint(tui.FGBrightRed, bad)
 				continue
 			}
@@ -158,31 +188,32 @@ func sessionStateWords(m sessionManifest) (text, colorCode string) {
 	return m.State, tui.FGYellow // states this build does not know keep their own words
 }
 
-// sessionMenu offers the three things history exists for: the
-// session-bound report, its details, and an explicit replay. The
-// first two are read-only; replay is the only action that starts
-// load, and it goes through the ordinary entry points (fresh
-// session id, fresh receipt - history replays requests, it does
-// not resurrect old sessions).
+// sessionMenu offers the four things history exists for: the
+// session-bound report, its details, an explicit replay, and a
+// read-only compare against another recorded session (R35). The
+// report, details and compare are read-only; replay is the only
+// action that starts load, and it goes through the ordinary entry
+// points (fresh session id, fresh receipt - history replays
+// requests, it does not resurrect old sessions).
 func sessionMenu(in *bufio.Reader, ui *screenUI, sessionID string, worst *int) int {
 	note := ""
 	for {
 		lines := []string{
-			fmt.Sprintf("--- Session %s ---", sessionID),
-			"  1) Report on this session",
-			"  2) Details (plan and files)",
-			"  3) Repeat this request",
-			"  q) Back to history",
+			fmt.Sprintf(tx("--- Session %s ---"), sessionID),
+			tx("  1) Report on this session"),
+			tx("  2) Details (plan and files)"),
+			tx("  3) Repeat this request"),
+			tx("  4) Compare with another session (read-only)"),
+			tx("  q) Back to history"),
 		}
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Action [q]: ")
+		ui.screenPrompt(lines, tx("Action [q]: "))
 
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
+		choice, eof := navChoice(in, ui, lines, tx("Action [q]: "), "q")
+		if eof {
 			fmt.Println()
 			return 0
 		}
@@ -204,21 +235,21 @@ func sessionMenu(in *bufio.Reader, ui *screenUI, sessionID string, worst *int) i
 				continue
 			}
 			if m.Request == nil {
-				note = ui.paint(tui.FGYellow, "Repeat unavailable: this session's manifest stores no request.")
+				note = ui.paint(tui.FGYellow, tx("Repeat unavailable: this session's manifest stores no request."))
 				continue
 			}
 			// R25: a history replay is a load too - the plan screen and
 			// an explicit yes come before anything is armed; a refusal
 			// leaves the repeat slot exactly as it was.
 			if !confirmRepeat(in, ui, m.Request) {
-				note = "Cancelled: nothing armed, no load started, the repeat slot keeps the previous test."
+				note = tx("Cancelled: nothing armed, no load started, the repeat slot keeps the previous test.")
 				continue
 			}
 			if err := saveLastRun(*m.Request); err != nil {
 				// The replay slot must actually hold THIS request
 				// before repeating: replaying the stale slot would
 				// answer a question nobody asked.
-				note = ui.paint(tui.FGBrightRed, fmt.Sprintf("Request not armed: %v", err))
+				note = ui.paint(tui.FGBrightRed, fmt.Sprintf(tx("Request not armed: %v"), err))
 				continue
 			}
 			before := lastAttemptID()
@@ -227,10 +258,85 @@ func sessionMenu(in *bufio.Reader, ui *screenUI, sessionID string, worst *int) i
 				return menuStopExit(in, ui, exit, before)
 			}
 			return 0 // back to the history list: it rescans and shows the new session
+		case "4":
+			// R35: the read-only compare, same engine the 'compare'
+			// command uses. Choosing a partner is navigation, not a
+			// load: nothing is confirmed, nothing is written, and an
+			// unresolvable choice just returns to this menu.
+			partners := comparePartners(sessionID)
+			if len(partners) == 0 {
+				note = ui.paint(tui.FGYellow, tx("Nothing to compare with: this is the only recorded session."))
+				continue
+			}
+			shown := partners
+			if len(shown) > historyShow {
+				shown = shown[:historyShow]
+			}
+			fmt.Println()
+			fmt.Printf(tx("Compare %s with which session (number, or the exact id)?\n"), sessionID)
+			for i, pm := range shown {
+				fmt.Printf("  %d) %s\n", i+1, sessionHistoryLine(ui, pm))
+			}
+			if len(partners) > len(shown) {
+				fmt.Printf(tx("  (%d older sessions are not listed here - name one by its exact id)\n"), len(partners)-len(shown))
+			}
+			fmt.Print(tx("Partner [q cancels]: "))
+			pline, perr := in.ReadString('\n')
+			partner := strings.TrimSpace(pline)
+			if perr != nil && partner == "" {
+				fmt.Println()
+				return 0
+			}
+			if partner == "" || strings.EqualFold(partner, "q") {
+				note = tx("Compare cancelled: nothing was read beyond the history index, nothing changed.")
+				continue
+			}
+			partnerID := ""
+			if n, cerr := strconv.Atoi(partner); cerr == nil && n >= 1 && n <= len(shown) {
+				partnerID = shown[n-1].SessionID
+			} else {
+				for _, pm := range partners {
+					if pm.SessionID == partner { // exact id only: a prefix could silently merge two sessions
+						partnerID = pm.SessionID
+						break
+					}
+				}
+			}
+			if partnerID == "" {
+				note = ui.paint(tui.FGBrightRed, tx("No such session: pick a listed number or name the exact id (ids are not guessed from fragments)."))
+				continue
+			}
+			sideA, err := loadCompareSide(sessionID)
+			if err != nil {
+				note = ui.paint(tui.FGBrightRed, err.Error())
+				continue
+			}
+			sideB, err := loadCompareSide(partnerID)
+			if err != nil {
+				note = ui.paint(tui.FGBrightRed, err.Error())
+				continue
+			}
+			fmt.Println()
+			printCompareText(os.Stdout, sideA, sideB, compareNotices(sideA.runs, sideB.runs))
+			ui.waitForEnter(in)
 		default:
-			note = ui.paint(tui.FGBrightRed, "Enter 1, 2, 3 or q.")
+			note = ui.paint(tui.FGBrightRed, tx("Enter 1, 2, 3, 4 or q."))
 		}
 	}
+}
+
+// comparePartners is the read-only partner list for the session
+// menu: every recorded session except this one, newest first (the
+// list itself is a fresh scan - history can never go stale).
+func comparePartners(sessionID string) []sessionManifest {
+	list, _ := listSessionManifests()
+	out := make([]sessionManifest, 0, len(list))
+	for _, m := range list {
+		if m.SessionID != sessionID {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // printStamp prints one UTC stamp as stored, plus the local reading

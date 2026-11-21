@@ -263,6 +263,6 @@ func (u *screenUI) waitForEnter(in *bufio.Reader) {
 	defer u.stopMonitor()
 	u.panel.SetOnEscape(nil)
 	u.panel.ClearRun()
-	u.panel.SetPrompt("Press Enter to return to the menu...")
+	u.panel.SetPrompt(tx("Press Enter to return to the menu..."))
 	_, _ = in.ReadString('\n')
 }

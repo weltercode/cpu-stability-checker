@@ -61,7 +61,7 @@ func (w *wizard) choose(label, prompt string, items []string, def int) int {
 		numbered[i] = fmt.Sprintf("%d) %s", i+1, item)
 	}
 	for {
-		w.draw(fmt.Sprintf("%s [%d] (q=back): ", prompt, def+1), numbered)
+		w.draw(fmt.Sprintf(tx("%s [%d] (q=back): "), prompt, def+1), numbered)
 		line, _ := w.in.ReadString('\n')
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -75,7 +75,7 @@ func (w *wizard) choose(label, prompt string, items []string, def int) int {
 			w.record(label, shortItem(items[n-1]))
 			return n - 1
 		}
-		w.note = fmt.Sprintf("Enter a number from 1 to %d, or q to go back.", len(items))
+		w.note = fmt.Sprintf(tx("Enter a number from 1 to %d, or q to go back."), len(items))
 	}
 }
 
@@ -92,7 +92,7 @@ func (w *wizard) chooseWorkload(defaultName string) (string, bool) {
 			def = i
 		}
 	}
-	selected := w.choose("Load algorithm", "Choose an algorithm", items, def)
+	selected := w.choose(tx("Load algorithm"), tx("Choose an algorithm"), items, def)
 	if selected < 0 {
 		return "", false
 	}
@@ -125,7 +125,7 @@ func (w *wizard) askDuration(label, prompt, def string) time.Duration {
 		return askDuration(w.in, prompt, def)
 	}
 	for {
-		w.draw(askPrompt(prompt+" (examples: 30s, 5m, 1h)", def), nil)
+		w.draw(askPrompt(prompt+tx(" (examples: 30s, 5m, 1h)"), def), nil)
 		line, _ := w.in.ReadString('\n')
 		value := strings.TrimSpace(line)
 		if strings.EqualFold(value, "q") {
@@ -139,7 +139,7 @@ func (w *wizard) askDuration(label, prompt, def string) time.Duration {
 			w.record(label, value)
 			return duration
 		}
-		w.note = "Enter a positive duration such as 30s, 5m, or 1h; q goes back."
+		w.note = tx("Enter a positive duration such as 30s, 5m, or 1h; q goes back.")
 	}
 }
 
@@ -167,7 +167,7 @@ func (w *wizard) askPositiveInt(label, prompt string, def int) int {
 			w.record(label, value)
 			return n
 		}
-		w.note = "Enter a positive whole number; q goes back."
+		w.note = tx("Enter a positive whole number; q goes back.")
 	}
 }
 
@@ -176,7 +176,7 @@ func (w *wizard) confirm() bool {
 	if !w.ui.hasScreen() {
 		return confirmRun(w.in, os.Stdout)
 	}
-	w.draw("Start this run? [y/N]: ", nil)
+	w.draw(tx("Start this run? [y/N]: "), nil)
 	line, _ := w.in.ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"

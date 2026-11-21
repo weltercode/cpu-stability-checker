@@ -16,30 +16,37 @@ import (
 // substituted with another file - and runs belonging to other
 // sessions (or predating session attribution) are counted and
 // excluded, never silently merged into this session's totals.
-func reportSession(sessionID string, asJSON, anomalies bool) int {
-	m, err := loadSessionManifest(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot read session %q: %v\n", sessionID, err)
-		return 2
-	}
+// sessionFileView is one child-run file listed by a manifest, with
+// its honest resolution status. A listed file that went missing stays
+// listed as MISSING - never substituted with another file; a child
+// whose files the manifest never learned stays "unnamed" (unknown,
+// not guessed). Runs of OTHER sessions living in the same shared
+// journal are counted, never merged.
+type sessionFileView struct {
+	Name          string          `json:"name,omitempty"`
+	Journal       string          `json:"journal,omitempty"`
+	Status        string          `json:"status"` // ok | missing | unnamed
+	Attributed    int             `json:"attributed_runs"`
+	NotAttributed int             `json:"not_attributed_runs"` // other sessions or predates attribution
+	Issues        *journal.Issues `json:"journal_issues,omitempty"`
+	attributed    []journal.RunReport
+}
 
-	type fileView struct {
-		Name          string          `json:"name,omitempty"`
-		Journal       string          `json:"journal,omitempty"`
-		Status        string          `json:"status"` // ok | missing | unnamed
-		Attributed    int             `json:"attributed_runs"`
-		NotAttributed int             `json:"not_attributed_runs"` // other sessions or predates attribution
-		Issues        *journal.Issues `json:"journal_issues,omitempty"`
-		attributed    []journal.RunReport
-	}
-	var files []fileView
+// loadSessionRuns resolves a manifest's file list into the runs
+// actually attributed to the session (run_meta.session_id - the
+// attribution rule that keeps shared journals honest). It is the
+// single loader behind every session-bound READ: the session report
+// and the session-vs-session compare. Read-only like both: nothing
+// is rewritten, nothing deleted, missing files stay missing.
+func loadSessionRuns(m sessionManifest) ([]sessionFileView, []journal.RunReport) {
+	var files []sessionFileView
 	var attributed []journal.RunReport
 	for _, r := range m.Runs {
 		jp := r.Journal
 		if jp == "" && r.Log != "" {
 			jp = journal.Path(r.Log) // the journal's naming rule is public; deriving it is not a guess
 		}
-		fv := fileView{Name: r.Name, Journal: jp}
+		fv := sessionFileView{Name: r.Name, Journal: jp}
 		switch {
 		case jp == "":
 			fv.Status = "unnamed" // the manifest never learned this child's files: unknown, not guessed
@@ -52,7 +59,7 @@ func reportSession(sessionID string, asJSON, anomalies bool) int {
 			recs, iss := journal.ReadAll(jp)
 			fv.Issues = iss
 			for _, rep := range journal.RecoverRuns(recs) {
-				if rep.Meta != nil && rep.Meta.SessionID == sessionID {
+				if rep.Meta != nil && rep.Meta.SessionID == m.SessionID {
 					fv.attributed = append(fv.attributed, rep)
 				} else {
 					fv.NotAttributed++
@@ -63,6 +70,17 @@ func reportSession(sessionID string, asJSON, anomalies bool) int {
 		files = append(files, fv)
 		attributed = append(attributed, fv.attributed...)
 	}
+	return files, attributed
+}
+
+func reportSession(sessionID string, asJSON, anomalies bool) int {
+	m, err := loadSessionManifest(sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot read session %q: %v\n", sessionID, err)
+		return 2
+	}
+
+	files, attributed := loadSessionRuns(m)
 
 	dips := map[int][]journal.ClockDip{}
 	if anomalies {
@@ -72,22 +90,22 @@ func reportSession(sessionID string, asJSON, anomalies bool) int {
 	if asJSON {
 		agg := summaryToJSON("", journal.SummarizeCores(attributed), dips, nil, wheaSummary(attributed))
 		js := struct {
-			Schema     int              `json:"schema"`
-			SessionID  string           `json:"session_id"`
-			Kind       string           `json:"kind"`
-			State      string           `json:"state"`
-			Started    string           `json:"started"`
-			Finished   string           `json:"finished,omitempty"` // absent = never finalized (crash, or still running)
-			Exit       *int             `json:"exit,omitempty"`     // null = the session never ended observably
-			Validation string           `json:"validation,omitempty"`
-			RecipeID   string           `json:"recipe_id,omitempty"`
-			ProfileID  string           `json:"profile_id,omitempty"`
-			Files      []fileView       `json:"files"`
-			Runs       int              `json:"attributed_runs"`
-			Whea       *wheaSummaryJSON `json:"whea,omitempty"`
-			Provenance []provenanceJSON `json:"provenance,omitempty"`
-			RunDetails []runDetailJSON  `json:"run_details,omitempty"`
-			Cores      []reportCoreJSON `json:"cores"`
+			Schema     int               `json:"schema"`
+			SessionID  string            `json:"session_id"`
+			Kind       string            `json:"kind"`
+			State      string            `json:"state"`
+			Started    string            `json:"started"`
+			Finished   string            `json:"finished,omitempty"` // absent = never finalized (crash, or still running)
+			Exit       *int              `json:"exit,omitempty"`     // null = the session never ended observably
+			Validation string            `json:"validation,omitempty"`
+			RecipeID   string            `json:"recipe_id,omitempty"`
+			ProfileID  string            `json:"profile_id,omitempty"`
+			Files      []sessionFileView `json:"files"`
+			Runs       int               `json:"attributed_runs"`
+			Whea       *wheaSummaryJSON  `json:"whea,omitempty"`
+			Provenance []provenanceJSON  `json:"provenance,omitempty"`
+			RunDetails []runDetailJSON   `json:"run_details,omitempty"`
+			Cores      []reportCoreJSON  `json:"cores"`
 		}{
 			Schema: 1, SessionID: m.SessionID, Kind: m.Kind, State: m.State,
 			Started: m.Started, Finished: m.Finished, Exit: m.Exit, Validation: m.Validation,

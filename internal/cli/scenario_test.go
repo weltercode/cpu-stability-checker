@@ -487,6 +487,57 @@ func TestRunCycles(t *testing.T) {
 		}
 	})
 
+	t.Run("multi-cycle headers name the global slot range", func(t *testing.T) {
+		var out strings.Builder
+		execute := func(opt plan.Options) plan.Result { return plan.Result{Validation: plan.ValVerified} }
+		if code := runCycles([]plan.Options{phase("a"), phase("b")}, 2, -1, &out, execute, false, nil, nil, nil); code != 0 {
+			t.Fatalf("runCycles() exit code = %d, want 0\n%s", code, out.String())
+		}
+		for _, want := range []string{
+			"=== cycle 1/2 === runs 1-2 of 4 planned",
+			"=== cycle 2/2 === runs 3-4 of 4 planned",
+			"scenario: cycle 2/2 — 4 of 4 planned run(s) started so far",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("output = %q, want it to contain %q", out.String(), want)
+			}
+		}
+	})
+
+	t.Run("a stop inside the cycles still states the global position", func(t *testing.T) {
+		var out strings.Builder
+		var n int
+		execute := func(opt plan.Options) plan.Result {
+			n++
+			if n == 3 {
+				return plan.Result{Exit: 1, Aborted: true}
+			}
+			return plan.Result{Validation: plan.ValVerified}
+		}
+		if code := runCycles([]plan.Options{phase("a"), phase("b")}, 2, -1, &out, execute, false, nil, nil, nil); code == 0 {
+			t.Fatalf("runCycles() exit code = %d, want nonzero after an abort\n%s", code, out.String())
+		}
+		for _, want := range []string{
+			"=== cycle 2/2 === runs 3-4 of 4 planned",
+			"stopped after phase 1",
+			"— 3 of 4 planned run(s) started so far",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("output = %q, want it to contain %q", out.String(), want)
+			}
+		}
+		// A single cycle keeps its historical wording byte-identically:
+		// no global clause appears anywhere.
+		out.Reset()
+		if code := runScenario([]plan.Options{phase("a"), phase("b")}, &out,
+			func(opt plan.Options) plan.Result { return plan.Result{Validation: plan.ValVerified} }, false); code != 0 {
+			t.Fatalf("runScenario() exit code = %d, want 0\n%s", code, out.String())
+		}
+		if strings.Contains(out.String(), "planned run(s)") {
+			t.Errorf("single-cycle output gained a multi-cycle clause:\n%s", out.String())
+		}
+	})
+
 	t.Run("single cycle prints no cycle marker", func(t *testing.T) {
 		var out strings.Builder
 		execute := func(opt plan.Options) plan.Result { return plan.Result{} }
@@ -624,6 +675,66 @@ func TestScenarioCmdGuards(t *testing.T) {
 			t.Fatalf("scenarioCmd() exit code = %d, want 2", code)
 		}
 	})
+}
+
+// The plan screen must state the whole multi-cycle clock BEFORE the phase
+// dump: the owner stopped a 31-slot x 3-cycle preset in a hurry because the
+// screen never told him the plan was hours long, and in screen mode the
+// dump's tail scrolls out of view. The sum is labeled as an estimate
+// (settle/rotation/tool startup add on top), scheduled phases contribute
+// their schedule span, and a phase whose length is not clock-defined is
+// named as uncounted - never folded into the sum as zero.
+func TestScenarioPlanPlannedClockWindows(t *testing.T) {
+	opts := []plan.Options{
+		{TestName: "general", Phase: "a", A: "int", Duration: 10 * time.Second},
+		{TestName: "general", Phase: "b", A: "int", Duration: 5 * time.Second},
+	}
+	var out strings.Builder
+	printScenarioPlan(&out, config.Default(), opts, 3)
+	s := out.String()
+	for _, want := range []string{
+		"planned clock windows across 3 cycle(s): ~45s for 6 planned run(s)",
+		"configured load time: 15s per cycle (settle/rotation/tool startup add on top)",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("plan output missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Index(s, "planned clock windows") > strings.Index(s, "  1) a:") {
+		t.Errorf("the whole-run estimate must precede the phase dump (screens show the head):\n%s", s)
+	}
+
+	// A single cycle keeps the historical line byte-identically and gains
+	// no multiplier line.
+	out.Reset()
+	printScenarioPlan(&out, config.Default(), opts, 1)
+	s = out.String()
+	if strings.Contains(s, "planned clock windows") {
+		t.Errorf("single-cycle plan must not print the cycle line:\n%s", s)
+	}
+	if !strings.Contains(s, "configured load time: 15s per cycle (settle/rotation/tool startup add on top)\n") {
+		t.Errorf("per-cycle line drifted:\n%s", s)
+	}
+
+	// Mixed shapes: bursts contribute their schedule span, handoff rounds
+	// are named as not clock-defined and contribute nothing to the sum.
+	out.Reset()
+	mixed := []plan.Options{
+		{TestName: "general", Phase: "a", A: "int", Duration: 2 * time.Second},
+		{TestName: "general", A: "ram-constant", Bursts: 4, BurstGap: 2 * time.Second, BurstRun: time.Second},
+		{TestName: "general", Phase: "h", A: "ram-handoff", HandoffBlocks: 2, HandoffBlockBytes: 1 << 20, HandoffRounds: 3},
+	}
+	printScenarioPlan(&out, config.Default(), mixed, 2)
+	s = out.String()
+	if !strings.Contains(s, "planned clock windows across 2 cycle(s): ~28s for 6 planned run(s)") ||
+		!strings.Contains(s, "estimate, not wall-clock: actual time may be shorter or longer") ||
+		!strings.Contains(s, "1 phase(s) per cycle have no clock-defined duration and are excluded from this subtotal") ||
+		!strings.Contains(s, "1 phase(s) with no clock-defined duration excluded from this subtotal") {
+		t.Errorf("estimate must count schedule spans and name unscheduled phases (never zero-fold them):\n%s", s)
+	}
+	if !strings.Contains(s, "configured load time: 14s per cycle") {
+		t.Errorf("per-cycle sum wrong (expected 2s + 4x3s span, handoff uncounted):\n%s", s)
+	}
 }
 
 // The menu must not spin forever when stdin is exhausted (piped input,

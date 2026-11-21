@@ -704,6 +704,11 @@ func ExecuteSubprocessWithPanel(opt plan.Options, panel *dashboard.Console) (res
 		wl := w.wl
 		verification := workload.VerificationOf(wl)
 		u := plan.UnitInput{VerificationRequired: wl != workload.Idle && verification != workload.VerifyNone}
+		// R29: the slot's engine accounting rides into Finalize (nil
+		// stays nil: no mem_done = unknown coverage, never zero).
+		if o, ok := outcomes[w.core]; ok && o.mem != nil {
+			u.Mem = planMemFromJournal(o.mem)
+		}
 		switch verification {
 		case workload.VerifyIndependent, workload.VerifyRepeated, workload.VerifyKAT:
 			// The child counted its own self-checking iterations and
@@ -822,7 +827,42 @@ func ExecuteSubprocessWithPanel(opt plan.Options, panel *dashboard.Console) (res
 	}
 	noticeErr(fmt.Sprintf("verdict: %s · validation %s · %s · slots %d/%d completed",
 		res.Execution, res.Validation, checksNote, res.Coverage.Completed, res.Coverage.Planned))
+	// R29 (owner complaint 2026-11-12: nobody could see how many bytes
+	// the engine actually took): the parent folds the children's own
+	// mem_done records into one run-level line, right beside the
+	// verdict. Cumulative labeling, unknowns stated - never a
+	// physical-RAM coverage claim. When no slot reported accounting,
+	// nothing is printed here: absence means not observed, and the
+	// journal's mem_done records stay the authority.
+	if line := res.Coverage.Mem.RAMString(); line != "" {
+		noticeErr(line)
+	}
 	return res
+}
+
+// planMemFromJournal translates one child's mem_done accounting into
+// the plan layer's fact shape (the plan model stays journal-free;
+// the executor does the translation, so no second set of numbers is
+// ever invented on the way).
+func planMemFromJournal(m *journal.MemAccounting) *plan.MemAccounting {
+	if m == nil {
+		return nil
+	}
+	f := &plan.MemAccounting{
+		Requested: m.Requested,
+		Allocated: m.Allocated,
+		Touched:   m.Touched,
+		Verified:  m.Verified,
+	}
+	if m.VerifiedUnique != nil {
+		v := *m.VerifiedUnique
+		f.VerifiedUnique = &v
+	}
+	if m.VerifiedTotal != nil {
+		v := *m.VerifiedTotal
+		f.VerifiedTotal = &v
+	}
+	return f
 }
 
 // wheaFactoryForRun is the package seam for the WHEA observation:
@@ -879,6 +919,12 @@ type coreOutcomeRec struct {
 	// fault is MEMORY evidence (with region/offset) rather than an
 	// indictment of the CPU that observed it.
 	ram *journal.RamEvidence
+	// mem is the child's memory-engine accounting from its mem_done
+	// record (R29; nil = the slot never reported one: no engine, a
+	// killed child, an interrupted child that never reached its
+	// settle). The parent folds these into run-level totals; absence
+	// keeps the slot's coverage unknown, never zero.
+	mem *journal.MemAccounting
 }
 
 // scanCoreOutcomes reads the endings for one run from the main journal
@@ -899,6 +945,17 @@ func scanCoreOutcomes(mainPath, runID string) (map[int]coreOutcomeRec, *journal.
 				continue
 			}
 			switch rec.Type {
+			case journal.MemDone:
+				// R29: the child's own accounting. The child writes
+				// mem_done just before its core_done, so this case
+				// usually runs first - the core_done case below must
+				// merge, not clobber, what was learned here.
+				if o, ok := states[*rec.Core]; ok {
+					o.mem = rec.Mem
+					states[*rec.Core] = o
+				} else {
+					states[*rec.Core] = coreOutcomeRec{mem: rec.Mem}
+				}
 			case journal.CoreStart:
 				// Never downgrade a known ending: a fragment core_start
 				// can be read after a core_done the parent wrote.
@@ -906,7 +963,11 @@ func scanCoreOutcomes(mainPath, runID string) (map[int]coreOutcomeRec, *journal.
 					states[*rec.Core] = coreOutcomeRec{status: journal.Crashed}
 				}
 			case journal.CoreDone:
-				states[*rec.Core] = coreOutcomeRec{status: rec.Result, msg: rec.Msg, checks: rec.Checks, evidence: rec.Evidence, ram: rec.Ram}
+				mem := rec.Mem // a core_done never carries it; keep the slot's known accounting
+				if o, ok := states[*rec.Core]; ok && mem == nil {
+					mem = o.mem
+				}
+				states[*rec.Core] = coreOutcomeRec{status: rec.Result, msg: rec.Msg, checks: rec.Checks, evidence: rec.Evidence, ram: rec.Ram, mem: mem}
 			}
 		}
 	}

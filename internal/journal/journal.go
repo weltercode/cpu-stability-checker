@@ -104,6 +104,12 @@ type MemAccounting struct {
 	// Verified is the number of engine bytes the workload's last
 	// completed pass actually checked; 0 means the engine memory was
 	// allocated and touched but never verified by the workload.
+	// What counts as a completed verification unit is defined by the
+	// reporting kernel: whole-region kernels report their last full
+	// pass, ram-block4 reports the running distinct bytes its
+	// immediate-verify blocks have covered (so a cancelled partial
+	// sweep still tells the truth instead of reading as "never
+	// verified").
 	Verified uint64 `json:"verified"`
 	// LockMode/Locked/LockFailure report what the page-lock policy
 	// really achieved: "off" attempted nothing, "try" may have
@@ -127,6 +133,10 @@ type MemAccounting struct {
 	// zero. They separate "how much of the region did we actually
 	// look at" from "how much checking work did we do" - the plan
 	// demands both counts, never one pretending to be the other.
+	// ram-block4 declares passes per whole region sweep only: a
+	// phase that never finished a sweep leaves these channels
+	// unknown even though its verified blocks ride Verified and the
+	// confirmed-checks count.
 	VerifiedUnique *uint64 `json:"verified_unique_bytes,omitempty"`
 	VerifiedTotal  *uint64 `json:"verified_total_bytes,omitempty"`
 }

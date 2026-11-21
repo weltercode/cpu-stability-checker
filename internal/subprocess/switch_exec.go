@@ -421,6 +421,13 @@ func executeSwitch(opt plan.Options, panel *dashboard.Console) (int, plan.Result
 			Attribution: plan.Attribution{Kind: plan.AttrRun, Confidence: plan.ConfConfirmed},
 		})
 	}
+	// R34: the live mem fold for pair switch - each participant runs a
+	// prepared session worker that journals its own mem_done (budget
+	// grants per participant, shared single fold rule via plan.FoldRAM).
+	// The aggregated switch verdict unit is untouched; participants that
+	// never reported accounting count as unknown slots, never zeros.
+	res.Coverage.Mem = foldRunRAM(jpath, runID, len(parts))
+	memLine := res.Coverage.Mem.RAMString() // "" when nobody reported
 	// run_end carries the FINAL exit (see session_exec: the journal
 	// and the returned Result must state the same ending).
 	jw.RunEndValidation(res.Exit, string(res.Validation))
@@ -429,7 +436,7 @@ func executeSwitch(opt plan.Options, panel *dashboard.Console) (int, plan.Result
 	}
 	jw.Close()
 
-	writeSwitchReport(info, jpath, parts, names, out, parkLine)
+	writeSwitchReport(info, jpath, parts, names, out, parkLine, memLine)
 	return exit, res, cores
 }
 
@@ -515,12 +522,17 @@ func printSwitchSummary(w io.Writer, parts []SwitchParticipant, names []string, 
 // report into exactly one write (panel-friendly). The reader sees the
 // prepared switch timeline, the parent's turn records and every
 // member's own session_burst records as separate evidence, exactly
-// as written.
-func writeSwitchReport(w io.Writer, jpath string, parts []SwitchParticipant, names []string, out SwitchOutcome, parkLine string) {
+// as written. The mem line (empty = no participant reported
+// accounting) is the R34 live fold, stated where the run's outcome
+// is stated.
+func writeSwitchReport(w io.Writer, jpath string, parts []SwitchParticipant, names []string, out SwitchOutcome, parkLine, memLine string) {
 	var report strings.Builder
 	printSwitchSummary(&report, parts, names, out)
 	if parkLine != "" {
 		fmt.Fprintf(&report, "%s\n", parkLine)
+	}
+	if memLine != "" {
+		fmt.Fprintf(&report, "%s\n", memLine)
 	}
 	recs, iss := journal.ReadAll(jpath)
 	if iss.ReadErr != "" {

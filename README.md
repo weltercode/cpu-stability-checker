@@ -32,6 +32,11 @@ What the tool can already do:
 - a task menu that greets you with the same items every start and never
   starts a load without showing its plan and taking an explicit yes — the
   saved-test repeat and the history replay go through that same confirm;
+  arrows move a visible marker between the numbered items, Enter selects
+  the marked item and Esc goes back — typed numbers and the scripted
+  flows keep their exact old meaning, and the marker can never land on
+  quit or on the destructive history clean-up (that one still asks for
+  the exact typed word);
 - `burst`, `pairs`, `curve`, and physical-core `cycle` generators;
 - prepared idle/load sessions and shared-memory ownership handoff;
 - WHEA and temperature monitoring with explicit degraded/unavailable states,
@@ -45,11 +50,16 @@ What the tool can already do:
   memory records, read-only;
 - `config` / `config show` — which config file this directory actually reads,
   its state, and every value with the meaning a run gives it;
+- a `language` value in `config.json` re-labels the interactive menu wording
+  from an embedded text file (`en` is the base, `ru` ships with this build);
+  run outputs, reports and on-disk records stay English by design — one
+  language for evidence — and a phrase with no translation renders the
+  English one, never a raw key and never an empty;
 - adapters for external programs such as Prime95 and y-cruncher;
 - a recoverable Curve Optimizer transaction layer and fake-only automatic
   tuning.
 
-This is an experimental preview (this tag is `v0.1.3`), not a finished
+This is an experimental preview (this tag is `v0.1.4`), not a finished
 release. The open gaps are:
 
 - the park/wake hypothesis: prepared transitions can now OBSERVE and journal

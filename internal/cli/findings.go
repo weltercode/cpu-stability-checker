@@ -216,9 +216,9 @@ func findingsUnreadCount() int {
 func findingsMenuItem(ui *screenUI) string {
 	n := findingsUnreadCount()
 	if n > 0 {
-		return ui.paint(tui.FGBrightRed, fmt.Sprintf("  7) View findings - %d unread unfinished attempt(s)", n))
+		return ui.paint(tui.FGBrightRed, fmt.Sprintf(tx("  7) View findings - %d unread unfinished attempt(s)"), n))
 	}
-	return "  7) View findings - none unread"
+	return tx("  7) View findings - none unread")
 }
 
 func setFindingFlag(id string, read, deleted bool) {
@@ -302,17 +302,17 @@ func findingsMenu(in *bufio.Reader, ui *screenUI) int {
 			}
 			shown = append(shown, f)
 		}
-		lines := []string{"--- Findings - unfinished attempts and their evidence (newest first) ---"}
+		lines := []string{tx("--- Findings - unfinished attempts and their evidence (newest first) ---")}
 		if len(shown) == 0 {
 			if len(items) == 0 {
-				lines = append(lines, "  no unfinished attempt evidence in this directory")
+				lines = append(lines, tx("  no unfinished attempt evidence in this directory"))
 			} else {
 				// Dismissed notifications hide themselves; saying "no
 				// evidence" here would be false - the evidence is still
 				// exactly where it was.
-				lines = append(lines, "  all findings are dismissed - the evidence on disk was never touched: 'journal <file>' and 'report' still render the full story")
+				lines = append(lines, tx("  all findings are dismissed - the evidence on disk was never touched: 'journal <file>' and 'report' still render the full story"))
 			}
-			lines = append(lines, "  (deleted rows dismiss only the notification: journals, manifests and receipts on disk are never rewritten)")
+			lines = append(lines, tx("  (deleted rows dismiss only the notification: journals, manifests and receipts on disk are never rewritten)"))
 		}
 		unread := 0
 		for i, f := range shown {
@@ -323,16 +323,15 @@ func findingsMenu(in *bufio.Reader, ui *screenUI) int {
 			}
 			lines = append(lines, fmt.Sprintf("  %d) %s · %s · %s%s", i+1, findingWhen(f.When), f.Shape, f.Error, mark))
 		}
-		lines = append(lines, "", fmt.Sprintf("  a) mark all as read (%d unread)   q) back", unread))
+		lines = append(lines, "", fmt.Sprintf(tx("  a) mark all as read (%d unread)   q) back"), unread))
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Findings: number to open, a = all read, q = back: ")
+		ui.screenPrompt(lines, tx("Findings: number to open, a = all read, q = back: "))
 
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
+		choice, eof := navChoice(in, ui, lines, tx("Findings: number to open, a = all read, q = back: "), "q")
+		if eof {
 			return 0
 		}
 		switch {
@@ -340,18 +339,18 @@ func findingsMenu(in *bufio.Reader, ui *screenUI) int {
 			return 0
 		case choice == "a":
 			markAllFindingsRead()
-			note = "All current findings marked read."
+			note = tx("All current findings marked read.")
 			continue
 		}
 		n, err := strconv.Atoi(choice)
 		if err != nil || n < 1 || n > len(shown) {
-			note = "Enter a listed number, a, or q."
+			note = tx("Enter a listed number, a, or q.")
 			continue
 		}
 		if code, dismissed := findingDetailMenu(in, ui, shown[n-1]); code != 0 {
 			return code
 		} else if dismissed {
-			note = "Dismissed: this notification is gone; the evidence stays on disk untouched."
+			note = tx("Dismissed: this notification is gone; the evidence stays on disk untouched.")
 		}
 	}
 }
@@ -367,14 +366,14 @@ func findingDetailMenu(in *bufio.Reader, ui *screenUI, f finding) (int, bool) {
 		lines := findingDetail(f)
 		lines = append(lines,
 			"",
-			"  (reading changed nothing: these records were only read; 'journal <file>' and 'report' render the full story from them)",
+			tx("  (reading changed nothing: these records were only read; 'journal <file>' and 'report' render the full story from them)"),
 			"",
-			"  r) mark as read   d) dismiss this notification (the on-disk evidence stays exactly as it is)   q) back to the list")
+			tx("  r) mark as read   d) dismiss this notification (the on-disk evidence stays exactly as it is)   q) back to the list"))
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Action [q]: ")
+		ui.screenPrompt(lines, tx("Action [q]: "))
 		line, readErr := in.ReadString('\n')
 		choice := strings.ToLower(strings.TrimSpace(line))
 		if readErr != nil && choice == "" {
@@ -383,7 +382,7 @@ func findingDetailMenu(in *bufio.Reader, ui *screenUI, f finding) (int, bool) {
 		switch choice {
 		case "r":
 			setFindingFlag(f.ID, true, false)
-			note = "Marked read."
+			note = tx("Marked read.")
 		case "d":
 			setFindingFlag(f.ID, false, true)
 			return 0, true

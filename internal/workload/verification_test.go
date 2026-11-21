@@ -21,6 +21,7 @@ func TestFaultClassOf(t *testing.T) {
 		"ram-stride":   FaultMemory,
 		"ram-copy":     FaultMemory,
 		"ram-dwell":    FaultMemory,
+		"ram-block4":   FaultMemory,
 		"fault":        FaultSynthetic,
 		"int":          FaultCompute,
 		"mem":          FaultCompute,

@@ -643,6 +643,13 @@ func executeHandoffPhase(spec HandoffSpec, panel *dashboard.Console, info io.Wri
 	aborted, abortMsg, abortKind := guard.AbortInfo()
 
 	res := plan.Finalize(handoffFinalInput(out, guard.Findings(), aborted, abortMsg, abortKind))
+	// R34: handoff workers open the shared engine and journal their
+	// own mem_done before core_done - same fragments, same single
+	// fold rule (plan.FoldRAM), and the aggregated verdict unit of
+	// handoffFinalInput stays exactly as it was: per-slot accounting
+	// folds by the planned participant count, so a worker that never
+	// reached its terminal path leaves its slot unknown, never zero.
+	res.Coverage.Mem = foldRunRAM(jpath, spec.RunID, len(spec.Cores))
 	jw.RunEndValidation(res.Exit, string(res.Validation))
 	if jerr, _ := jw.Errors(); jerr != nil {
 		fmt.Fprintf(os.Stderr, "warning: journal incomplete: %v\n", jerr)
@@ -651,6 +658,9 @@ func executeHandoffPhase(spec HandoffSpec, panel *dashboard.Console, info io.Wri
 
 	fmt.Fprintf(info, "handoff: %d of %d block handoffs completed · %s", out.HandoffsDone, out.HandoffsTried, verificationPhrase(out))
 	fmt.Fprintf(info, " · %s\n", out.LLCInfo)
+	if line := res.Coverage.Mem.RAMString(); line != "" {
+		fmt.Fprintf(info, "%s\n", line)
+	}
 	if out.Fault != "" {
 		fmt.Fprintf(os.Stderr, "handoff fault on core %d: %s\n", out.FaultCore, out.Fault)
 	}

@@ -322,6 +322,28 @@ func TestExecuteSubprocessMemoryEndToEnd(t *testing.T) {
 	if rep.Cores[0].Checks == nil || *rep.Cores[0].Checks == 0 {
 		t.Errorf("mem iterations missing from verified checks: %+v", rep.Cores[0])
 	}
+	// R29: the parent must fold the child's own mem_done into the
+	// run RESULT (coverage), not only into fragment files: this is
+	// the number the summary line and the receipt carry, so coverage
+	// can never again become unknowable after the fact.
+	if res.Coverage.Mem == nil {
+		t.Fatal("run result carries no memory fold despite a verified mem_done record")
+	}
+	mem := res.Coverage.Mem
+	if mem.EngineSlots != 1 || mem.UnknownSlots != 0 {
+		t.Errorf("slots accounted %d / unknown %d, want 1/0: one child, and it reported", mem.EngineSlots, mem.UnknownSlots)
+	}
+	if mem.Requested != data || mem.Touched != data || mem.Verified != data {
+		t.Errorf("fold bytes requested %d / touched %d / verified %d, want each %d",
+			mem.Requested, mem.Touched, mem.Verified, data)
+	}
+	// The mem copy loop verifies cumulatively; it never declares a
+	// ram-kernel pass, so the last-pass uniqueness stays UNKNOWN and
+	// the fold must not invent a floor for it. Zero here means "no
+	// slot proved one", and the summary line leaves the clause out.
+	if mem.LastPass != 0 {
+		t.Errorf("last-pass = %d, want 0: the mem workload proves no unique pass volume, and the fold must not fabricate one", mem.LastPass)
+	}
 }
 
 // A ram kernel that ran clean must still leave evidence (Total 0 is
@@ -504,6 +526,21 @@ func TestExecuteSubprocessRamConstantE2E(t *testing.T) {
 	}
 	if rep.Cores[0].Checks == nil || *rep.Cores[0].Checks == 0 {
 		t.Errorf("pattern passes missing from verified checks: %+v", rep.Cores[0])
+	}
+	// R29 end to end through a real fragment file: the child writes
+	// mem_done just before core_done, and the parent's scan must
+	// MERGE the accounting into the slot's outcome, then fold the
+	// ram kernel's proven unique-pass volume into LastPass. If the
+	// core_done record clobbered the mem_done fact, LastPass would
+	// be zero here despite the journal proving otherwise.
+	if res.Coverage.Mem == nil {
+		t.Fatal("ram-constant run result carries no memory fold despite mem_done in the fragment")
+	}
+	if res.Coverage.Mem.LastPass != data {
+		t.Errorf("fold last-pass = %d, want %d (the ram kernel proved every data byte exactly once in its last pass)", res.Coverage.Mem.LastPass, data)
+	}
+	if res.Coverage.Mem.EngineSlots != 1 || res.Coverage.Mem.UnknownSlots != 0 {
+		t.Errorf("slots accounted %d / unknown %d, want 1/0", res.Coverage.Mem.EngineSlots, res.Coverage.Mem.UnknownSlots)
 	}
 }
 

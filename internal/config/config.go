@@ -227,10 +227,43 @@ type Config struct {
 	// and there the inherited word is cleared - nothing that shapes
 	// no run belongs in a plan hash. An unknown word is a visible
 	// setup error naming the vocabulary, same rule as memory_lock.
-	ParkingPolicy string  `json:"parking_policy,omitempty"`
-	RamSeed       uint64  `json:"ram_seed,omitempty"` // seed for the ram-* memory-test family: expected data = f(seed, region, pass, offset); 0 is a valid seed (the default), not "unset"
-	Phases        []Phase `json:"phases,omitempty"`   // scenario steps for the 'scenario' command
+	ParkingPolicy string `json:"parking_policy,omitempty"`
+	RamSeed       uint64 `json:"ram_seed,omitempty"` // seed for the ram-* memory-test family: expected data = f(seed, region, pass, offset); 0 is a valid seed (the default), not "unset"
+	// HistoryKeep is the retention POLICY for history records (R37,
+	// owner decision 2026-11-18): how many newest sessions the tool
+	// keeps after a session finalizes. -1 (HistoryKeepAll) keeps
+	// everything - the dev-machine answer; N >= 1 keeps the last N
+	// records AND their evidence bundles (log, journal, fragment
+	// tree), because the owner's users "usually work inside one run"
+	// and even a few KB per session pollute a plain machine. The
+	// default keeps the last 3. A literal 0 or any value below -1 is
+	// vocabulary-invalid: retention then does NOTHING and says so -
+	// deletion under an unknown policy is the forbidden silent
+	// fallback, same family as the broken-config rule. The value is
+	// only read at prune time from the live config.json; a replayed
+	// request never re-prunes with yesterday's number.
+	HistoryKeep int     `json:"history_keep,omitempty"`
+	Phases      []Phase `json:"phases,omitempty"` // scenario steps for the 'scenario' command
+	// Language selects the interactive UI wording (R41, owner-named
+	// 20.11: "the language selected in the config"). Empty / "en" =
+	// the English base in the source. Any other code asks for
+	// internal/i18n/texts/<code>.json; a code with no shipped file
+	// is not an error and never a silent fallback: the menu states
+	// that the language is not shipped and which base is in effect.
+	// Machine-facing wording (results, reports, JSON contracts, the
+	// exact confirming words of destructive actions) is NOT
+	// translated: on-disk records stay in one language.
+	Language string `json:"language,omitempty"`
 }
+
+// History retention vocabulary (config "history_keep"): the only two
+// legal shapes are HistoryKeepAll and integers >= 1. Zero is NOT a
+// legal "keep nothing": deleting every record behind an ambiguous zero
+// is exactly the silent destructive fallback this project refuses.
+const (
+	HistoryKeepAll     = -1 // never prune: keep every session and its files
+	HistoryKeepDefault = 3  // the built-in default when no key is set
+)
 
 // Default returns the built-in defaults used for every missing key.
 func Default() Config {
@@ -244,6 +277,7 @@ func Default() Config {
 		StopOnFault: true,
 		ShowMetrics: true,
 		Execution:   ExecutionAuto,
+		HistoryKeep: HistoryKeepDefault,
 	}
 }
 

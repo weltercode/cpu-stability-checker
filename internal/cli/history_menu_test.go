@@ -48,7 +48,7 @@ func TestHistoryMenuListsAndReports(t *testing.T) {
 		// "7" = View findings inbox, "1" = open the stuck session's
 		// detail, q back to list, q back to the menu; then the history
 		// walk as before.
-		if code := menuLoop(bufio.NewReader(strings.NewReader("7\n1\nq\nq\n5\n1\n1\n\nq\nq\n0\n")), config.Default()); code != 0 {
+		if code := menuLoop(bufio.NewReader(strings.NewReader("7\n1\nq\nq\n6\n1\n1\n\nq\nq\n0\n")), config.Default()); code != 0 {
 			t.Errorf("menu exit = %d, want 0", code)
 		}
 	})
@@ -113,7 +113,7 @@ func TestHistoryMenuTenLimitAndEmpty(t *testing.T) {
 		}
 	}
 	out := captureStdoutAndRun(t, func() {
-		menuLoop(bufio.NewReader(strings.NewReader("5\nq\n0\n")), config.Default())
+		menuLoop(bufio.NewReader(strings.NewReader("6\nq\n0\n")), config.Default())
 	})
 	if !strings.Contains(out, "showing 10 of 11") {
 		t.Errorf("truncation not stated:\n%s", out)
@@ -121,7 +121,7 @@ func TestHistoryMenuTenLimitAndEmpty(t *testing.T) {
 
 	chdirTemp(t)
 	out = captureStdoutAndRun(t, func() {
-		menuLoop(bufio.NewReader(strings.NewReader("5\n\n0\n")), config.Default())
+		menuLoop(bufio.NewReader(strings.NewReader("6\n\n0\n")), config.Default())
 	})
 	if !strings.Contains(out, "No sessions yet") {
 		t.Errorf("empty history not stated:\n%s", out)
@@ -147,7 +147,7 @@ func TestHistoryMenuReplayRefusedWithoutRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdoutAndRun(t, func() {
-		menuLoop(bufio.NewReader(strings.NewReader("5\n1\n3\nq\nq\n0\n")), config.Default())
+		menuLoop(bufio.NewReader(strings.NewReader("6\n1\n3\nq\nq\n0\n")), config.Default())
 	})
 	if !strings.Contains(out, "Repeat unavailable") {
 		t.Errorf("replay without a stored request went unrefused:\n%s", out)
@@ -204,7 +204,7 @@ func TestHistoryMenuReplayRunsAsNewSession(t *testing.T) {
 	out := captureStdoutAndRun(t, func() {
 		// R25: the replay is a load - the plan screen asks for an
 		// explicit yes before anything arms, so the script answers y.
-		menuLoop(bufio.NewReader(strings.NewReader("5\n1\n3\ny\nq\nq\n0\n")), config.Default())
+		menuLoop(bufio.NewReader(strings.NewReader("6\n1\n3\ny\nq\nq\n0\n")), config.Default())
 	})
 	if !strings.Contains(out, "Starting session") {
 		t.Errorf("the replay never started a session:\n%s", out)
@@ -246,7 +246,7 @@ func TestHistoryReplayRefusedWithoutExplicitYes(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdoutAndRun(t, func() {
-		menuLoop(bufio.NewReader(strings.NewReader("5\n1\n3\n\nq\nq\n0\n")), config.Default())
+		menuLoop(bufio.NewReader(strings.NewReader("6\n1\n3\n\nq\nq\n0\n")), config.Default())
 	})
 	if !strings.Contains(out, "Start this run? [y/N]") {
 		t.Errorf("the replay had no plan/confirm screen:\n%s", out)

@@ -42,8 +42,10 @@ func runMenu() int {
 	return menuLoop(bufio.NewReader(os.Stdin), cfg)
 }
 
-// menuLoop is the task menu of menu plan section 1: repeat first, the
-// three goal categories, results, settings, exit. The crash-loop
+// menuLoop is the task menu of menu plan section 1, separated by
+// effort since R39: repeat first, one fast bounded entry, the three
+// full goal categories, evidence (history, findings), advanced tools,
+// exit. The crash-loop
 // workflow is unchanged: a stopped or faulted run (exit 1) returns
 // toward "Repeat last test" one keystroke away, setup errors (2) and
 // force quits (130) end the session, and the worst run code seen
@@ -58,7 +60,16 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 	// state, but defaults are in effect only if the screen SAYS so -
 	// the old silence is exactly what made the deleted Load dangerous.
 	if _, statErr := os.Stat(config.DefaultPath); os.IsNotExist(statErr) {
-		note = "config.json: not found — defaults are in effect ('config init' writes one)."
+		note = tx("config.json: not found — defaults are in effect ('config init' writes one).")
+	}
+	// R41: the interactive wording language is chosen here, once per
+	// session, from config "language"; anything the selection has to
+	// admit (invalid code, unshipped language) rides the note line.
+	for _, ln := range installTexts(cfg) {
+		if note != "" {
+			note += "\n"
+		}
+		note += "language: " + ln
 	}
 	// R24 (owner UX contract 2026-11-10): the menu screen never greets
 	// the operator with witness text - the greeting wall made a working
@@ -75,17 +86,26 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 	// interactive user, the machine-facing pinned wording stays.
 	witnessMenuQuiet = true
 	worst := 0
+	missSaid := false
 	for {
 		lines := menuLines(ui)
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Action [1]: ")
+		// R41 honesty rail: when the selected language had nothing to
+		// translate somewhere this session actually rendered, say it
+		// exactly once instead of letting pass-throughs look native.
+		// The guard tests keep shipped files complete; this line is
+		// the runtime truth, not the guard's promise.
+		if !missSaid && uiTexts != nil && uiTexts.Lang() != "en" && uiTexts.MissCount() > 0 {
+			missSaid = true
+			lines = append(lines, ui.paint(tui.FGYellow, fmt.Sprintf(tx("language: %d UI string(s) had no translation in %s this session and stayed English"), uiTexts.MissCount(), uiTexts.Lang())))
+		}
+		ui.screenPrompt(lines, tx("Action [1]: "))
 
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
+		choice, eof := navChoice(in, ui, lines, tx("Action [1]: "), "0")
+		if eof {
 			// stdin is exhausted (piped input ended, Ctrl+Z, closed
 			// terminal): the default action would restart forever on an
 			// empty line, so an exhausted input means quit.
@@ -113,11 +133,11 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 			// (crash-loop contract); only the menu path confirms.
 			lr, err := loadLastRun()
 			if err != nil {
-				note = ui.paint(tui.FGBrightRed, "No previous run to repeat - start one test once and the menu remembers it here.")
+				note = ui.paint(tui.FGBrightRed, tx("No previous run to repeat - start one test once and the menu remembers it here."))
 				continue
 			}
 			if !confirmRepeat(in, ui, lr) {
-				note = "Cancelled: nothing armed, no load started."
+				note = tx("Cancelled: nothing armed, no load started.")
 				continue
 			}
 			before := lastAttemptID()
@@ -127,23 +147,51 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 			}
 			note = ui.paint(tui.FGBrightRed, runStopNote(code))
 			ui.waitForEnter(in)
-		case "2", "3", "4":
+		case "2":
+			// R39: the bounded quick check promoted to the main menu
+			// (owner-named fast path). It starts through the SAME card
+			// route the category screen uses - startProfile with the
+			// catalog card - one executor, no second path. The frozen
+			// card set makes the missing-card branch unreachable in
+			// practice; refusing there still beats guessing.
+			card, ok := catalog.Get("quick-check")
+			if !ok {
+				note = ui.paint(tui.FGBrightRed, tx("quick-check is not in this build's catalog: nothing started"))
+				continue
+			}
+			if card.Availability != catalog.Available {
+				note = ui.paint(tui.FGBrightRed, tx(card.Title)+tx(" is not available: ")+tx(card.Reason))
+				continue
+			}
 			topology, err := sysinfo.DiscoverTopology()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Cannot discover CPU topology: %v\n", err)
 				return 2
 			}
-			cat, title := catalog.CPU, "CPU check"
-			if choice == "3" {
-				cat, title = catalog.RAM, "RAM check"
+			before := lastAttemptID()
+			code := startProfile(in, ui, cfg, topology, card)
+			if stop, exit := menuRunOutcome(in, ui, &worst, code, before); stop {
+				return menuStopExit(in, ui, exit, before)
 			}
+			note = ui.paint(tui.FGBrightRed, runStopNote(code))
+			ui.waitForEnter(in)
+		case "3", "4", "5":
+			topology, err := sysinfo.DiscoverTopology()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Cannot discover CPU topology: %v\n", err)
+				return 2
+			}
+			cat, title := catalog.CPU, tx("CPU check")
 			if choice == "4" {
-				cat, title = catalog.MIX, "Mixed CPU + RAM tests"
+				cat, title = catalog.RAM, tx("RAM check")
+			}
+			if choice == "5" {
+				cat, title = catalog.MIX, tx("Mixed CPU + RAM tests")
 			}
 			if code := categoryMenu(in, ui, cfg, topology, cat, title, &worst); code != 0 {
 				return code
 			}
-		case "5":
+		case "6":
 			// U02: real session history - the last sessions read from
 			// their manifests, each reportable and replayable on its
 			// own. The old honest limitation note ("history is not
@@ -151,7 +199,7 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 			if code := historyMenu(in, ui, &worst); code != 0 {
 				return code
 			}
-		case "6":
+		case "8":
 			if code := settingsMenu(in, ui, cfg, &worst); code != 0 {
 				return code
 			}
@@ -166,7 +214,7 @@ func menuLoop(in *bufio.Reader, cfg config.Config) int {
 		case "0", "q", "quit":
 			return worst
 		default:
-			bad := "Enter a number from 1 to 7, or 0 to quit."
+			bad := tx("Enter a number from 1 to 8, or 0 to quit.")
 			if ui.hasScreen() {
 				note = ui.paint(tui.FGBrightRed, bad)
 			} else {
@@ -221,7 +269,7 @@ func menuRunOutcome(in *bufio.Reader, ui *screenUI, worst *int, code int, before
 	}
 	if exit != 0 {
 		ui.stopMonitor() // nil-safe: release the screen from the live panel
-		fmt.Fprintf(os.Stderr, "Not started (exit %d): the refusal line above is the reason - no attempt was armed and nothing was loaded. Back to the menu.\n", exit)
+		fmt.Fprintf(os.Stderr, tx("Not started (exit %d): the refusal line above is the reason - no attempt was armed and nothing was loaded. Back to the menu.\n"), exit)
 		waitForEnter(in)
 	}
 	if code == 0 {
@@ -255,10 +303,10 @@ func runStopNote(code int) string {
 	}
 	r, err := loadLastResult()
 	if err != nil {
-		return fmt.Sprintf("Run stopped (exit %d): INCOMPLETE - the attempt receipt is unreadable; the report and journal carry the story.", code)
+		return fmt.Sprintf(tx("Run stopped (exit %d): INCOMPLETE - the attempt receipt is unreadable; the report and journal carry the story."), code)
 	}
 	if r.State == receiptPending {
-		return fmt.Sprintf("Run stopped (exit %d): INCOMPLETE - the attempt never reported an ending (crash mid-run?); the report and journal carry the story.", code)
+		return fmt.Sprintf(tx("Run stopped (exit %d): INCOMPLETE - the attempt never reported an ending (crash mid-run?); the report and journal carry the story."), code)
 	}
 	v := verdictOfReceipt(r)
 	detail := v.Reason
@@ -271,19 +319,19 @@ func runStopNote(code int) string {
 	}
 	fnd := ""
 	if r.Findings > 0 {
-		fnd = fmt.Sprintf(", %d finding(s) recorded", r.Findings)
+		fnd = fmt.Sprintf(tx(", %d finding(s) recorded"), r.Findings)
 	}
 	switch v.Kind {
 	case plan.VerdictFail:
-		return fmt.Sprintf("Run stopped: FAIL - %s%s - a fault was reported; see the findings in the report and journal.", detail, fnd)
+		return fmt.Sprintf(tx("Run stopped: FAIL - %s%s - a fault was reported; see the findings in the report and journal."), detail, fnd)
 	case plan.VerdictUnverified:
-		return fmt.Sprintf("Run stopped: UNVERIFIED - %s%s - no fault was confirmed, but the run did not confirm its checks either.", detail, fnd)
+		return fmt.Sprintf(tx("Run stopped: UNVERIFIED - %s%s - no fault was confirmed, but the run did not confirm its checks either."), detail, fnd)
 	case plan.VerdictPass:
 		// The recorded runs all passed, yet the attempt as a whole
 		// stopped non-zero: the stop itself is the fact, not a pass.
-		return fmt.Sprintf("Run stopped (exit %d): INCOMPLETE - the runs that finished all passed, but the attempt did not finish cleanly.", code)
+		return fmt.Sprintf(tx("Run stopped (exit %d): INCOMPLETE - the runs that finished all passed, but the attempt did not finish cleanly."), code)
 	default:
-		return fmt.Sprintf("Run stopped: INCOMPLETE - %s%s - the load did not finish as planned; report and journal are ready.", detail, fnd)
+		return fmt.Sprintf(tx("Run stopped: INCOMPLETE - %s%s - the load did not finish as planned; report and journal are ready."), detail, fnd)
 	}
 }
 
@@ -300,12 +348,12 @@ func runFinishNote(beforeAttempt string) (note, colorCode string) {
 		return "", ""
 	}
 	if r.State == receiptPending {
-		return fmt.Sprintf("Run ended (exit %d) but the attempt never reported an ending (crash mid-run?); the report and journal carry the story.", 0), tui.FGYellow
+		return fmt.Sprintf(tx("Run ended (exit %d) but the attempt never reported an ending (crash mid-run?); the report and journal carry the story."), 0), tui.FGYellow
 	}
 	v := verdictOfReceipt(r)
-	cnt := fmt.Sprintf("%d/%d run(s) finished", r.RunsFinished, r.RunsPlanned)
+	cnt := fmt.Sprintf(tx("%d/%d run(s) finished"), r.RunsFinished, r.RunsPlanned)
 	if r.RunsPlanned == 0 {
-		cnt = fmt.Sprintf("%d run(s) finished", r.RunsFinished)
+		cnt = fmt.Sprintf(tx("%d run(s) finished"), r.RunsFinished)
 	}
 	fnd := ""
 	if r.Findings > 0 {
@@ -315,21 +363,21 @@ func runFinishNote(beforeAttempt string) (note, colorCode string) {
 	case plan.VerdictPass:
 		detail := v.Reason
 		if detail == "" {
-			detail = "every finished run confirmed its own verification"
+			detail = tx("every finished run confirmed its own verification")
 		}
-		return fmt.Sprintf("Run finished: RESULT: PASS - %s (%s%s). The summary above is the short story; 'report' the long one.", detail, cnt, fnd), ""
+		return fmt.Sprintf(tx("Run finished: RESULT: PASS - %s (%s%s). The summary above is the short story; 'report' the long one."), detail, cnt, fnd), ""
 	case plan.VerdictFail:
 		// The exit says clean, the receipt says a fault was recorded:
 		// the receipt wins, this must not read as a success.
-		return fmt.Sprintf("Run finished (exit 0) but the receipt records RESULT: FAIL - %s%s. Treat the cores/regions named by the findings as suspect.", v.Reason, fnd), tui.FGBrightRed
+		return fmt.Sprintf(tx("Run finished (exit 0) but the receipt records RESULT: FAIL - %s%s. Treat the cores/regions named by the findings as suspect."), v.Reason, fnd), tui.FGBrightRed
 	case plan.VerdictUnverified:
 		detail := v.Reason
 		if detail == "" {
-			detail = "the load completed but its correctness contract was not confirmed"
+			detail = tx("the load completed but its correctness contract was not confirmed")
 		}
-		return fmt.Sprintf("Run finished: RESULT: UNVERIFIED - %s (%s%s). No fault was confirmed, but the checks did not confirm themselves either.", detail, cnt, fnd), tui.FGYellow
+		return fmt.Sprintf(tx("Run finished: RESULT: UNVERIFIED - %s (%s%s). No fault was confirmed, but the checks did not confirm themselves either."), detail, cnt, fnd), tui.FGYellow
 	default:
-		return fmt.Sprintf("Run finished (exit 0): RESULT: %s - %s (%s%s); the report and journal carry the story.", v.Kind, v.Reason, cnt, fnd), tui.FGYellow
+		return fmt.Sprintf(tx("Run finished (exit 0): RESULT: %s - %s (%s%s); the report and journal carry the story."), v.Kind, v.Reason, cnt, fnd), tui.FGYellow
 	}
 }
 
@@ -361,7 +409,7 @@ func menuStopExit(in *bufio.Reader, ui *screenUI, code int, beforeAttempt string
 		// was refused before load), so its ending must not reuse the
 		// previous run's story - the refusal line printed above is
 		// the real reason.
-		n = fmt.Sprintf("Run refused (exit %d) before an attempt was armed - see the refusal line above; nothing was loaded.", code)
+		n = fmt.Sprintf(tx("Run refused (exit %d) before an attempt was armed - see the refusal line above; nothing was loaded."), code)
 	}
 	if n != "" {
 		fmt.Fprintln(os.Stderr, n)
@@ -371,7 +419,7 @@ func menuStopExit(in *bufio.Reader, ui *screenUI, code int, beforeAttempt string
 }
 
 func menuLines(ui *screenUI) []string {
-	lines := []string{"=== CPU Stability Checker ==="}
+	lines := []string{tx("=== CPU Stability Checker ===")}
 	if lr, err := loadLastRun(); err == nil {
 		// Menu plan section 1: the saved test's short parameters and
 		// its last outcome are visible on the screen right away - the
@@ -382,24 +430,45 @@ func menuLines(ui *screenUI) []string {
 		// Enter starts nothing and no item is marked.
 		text, code := outcomeSummary(lr)
 		lines = append(lines,
-			"› 1) Repeat the last test",
+			tx("› 1) Repeat the last test"),
 			"     "+recipeSummaryLine(lr),
 			"     "+ui.paint(code, text))
 	} else {
 		lines = append(lines,
-			"  1) Repeat the last test",
-			"     No previous test yet")
+			tx("  1) Repeat the last test"),
+			tx("     No previous test yet"))
+	}
+	// R39 (owner-named menu separation by effort): the sections name
+	// what they cost and what they are for; the labels are plain text
+	// — the words carry the meaning, color decorates at most. The
+	// quick-check card is promoted to a main-menu entry so the fast
+	// path costs one keystroke instead of a category visit; the entry
+	// states its own limit beside its name.
+	lines = append(lines,
+		"",
+		tx("Fast — a bounded pass for first words (minutes):"),
+		tx("  2) Quick check (bounded) — ~21 s planned load + setup"),
+		tx("     a clean word here is NOT a stability verdict"))
+	// R39c: the machine landmark for quick-check when it has something
+	// to say - an empty store prints nothing, an unreadable store
+	// states "unknown" with the reason, and a record names the LAST
+	// attempt word, whatever it was.
+	if l := observationInline("quick-check"); l != "" {
+		lines = append(lines, l)
 	}
 	return append(lines,
 		"",
-		"  2) CPU check",
-		"  3) RAM check",
-		"  4) Mixed CPU + RAM tests",
+		tx("Full test suites — longer runs, deeper evidence:"),
+		tx("  3) CPU check"),
+		tx("  4) RAM check"),
+		tx("  5) Mixed CPU + RAM tests"),
 		"",
-		"  5) Session history and reports",
-		"  6) Settings",
+		tx("Evidence and tools — what was recorded, and the detailed controls:"),
+		tx("  6) Session history and reports"),
 		findingsMenuItem(ui),
-		"  0) Quit",
+		tx("  8) Advanced tools (scenario/plan runs, diagnostics, About)"),
+		"",
+		tx("  0) Quit"),
 	)
 }
 
@@ -420,23 +489,22 @@ func hasSavedRecipe() bool {
 // nothing: no receipt armed, no slot rewritten, no load started.
 func confirmRepeat(in *bufio.Reader, ui *screenUI, lr *lastRun) bool {
 	lines := []string{
-		"--- Repeat the last test: the plan before any load ---",
+		tx("--- Repeat the last test: the plan before any load ---"),
 		"  " + recipeSummaryLine(lr),
 	}
 	if text, code := outcomeSummary(lr); text != "" {
-		lines = append(lines, "  last recorded outcome: "+ui.paint(code, text))
+		lines = append(lines, tx("  last recorded outcome: ")+ui.paint(code, text))
 	}
 	if items := scanFindings(); len(items) > 0 {
 		lines = append(lines,
 			"",
-			fmt.Sprintf("  unfinished evidence from previous attempt(s): %d - under menu item 7 'View findings'.", len(items)),
-			"  Starting arms a new attempt record; the unfinished records are NOT rewritten and this tool still claims no cause for them.")
+			fmt.Sprintf(tx("  unfinished evidence from previous attempt(s): %d - under menu item 7 'View findings'."), len(items)),
+			tx("  Starting arms a new attempt record; the unfinished records are NOT rewritten and this tool still claims no cause for them."))
 	}
 	lines = append(lines,
 		"",
-		"Starting puts this machine under load.",
-		"Start this run? [y/N]: ")
-	ui.screenPrompt(lines, "Start this run? [y/N]: ")
+		tx("Starting puts this machine under load."))
+	ui.screenPrompt(lines, tx("Start this run? [y/N]: "))
 	line, _ := in.ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"
@@ -449,23 +517,23 @@ func confirmRepeat(in *bufio.Reader, ui *screenUI, lr *lastRun) bool {
 func recipeSummaryLine(lr *lastRun) string {
 	if lr.Kind == lastRunSession && lr.Session != nil {
 		s := lr.Session
-		mode := "all cores"
+		mode := tx("all cores")
 		if s.Mode == sessionPerCore {
-			mode = "per core"
+			mode = tx("per core")
 		}
 		what := s.Workload
 		if p, ok := catalog.Get(lr.ProfileID); ok && lr.ProfileID != "" {
-			what = p.Title
+			what = tx(p.Title)
 		}
-		return fmt.Sprintf("%s · %s · %d cores · %s per pass · %d pass(es)",
+		return fmt.Sprintf(tx("%s · %s · %d cores · %s per pass · %d pass(es)"),
 			what, mode, len(s.PhysicalCores), human.Dur(s.Duration), s.Passes)
 	}
 	if lr.Kind == lastRunHandoff && lr.Handoff != nil {
 		h := lr.Handoff
-		return fmt.Sprintf("Handoff · %d cores · %d blocks × %s · %d round(s). Repeat arms a new attempt of the same geometry and seed (P07e S6).",
+		return fmt.Sprintf(tx("Handoff · %d cores · %d blocks × %s · %d round(s). Repeat arms a new attempt of the same geometry and seed."),
 			len(h.Cores), h.Blocks, human.Bytes(h.BlockBytes), h.Rounds)
 	}
-	return fmt.Sprintf("Scenario · %d phase(s) · %d cycle(s).", len(lr.Phases), max(lr.Cycles, 1))
+	return fmt.Sprintf(tx("Scenario · %d phase(s) · %d cycle(s)."), len(lr.Phases), max(lr.Cycles, 1))
 }
 
 // outcomeSummary maps the bound receipt onto one honest verdict line
@@ -503,24 +571,24 @@ func settingsMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, worst *int)
 	note := ""
 	for {
 		lines := []string{
-			"--- Settings ---",
-			"  1) Scenario from config.json — run",
-			"  2) Scenario from config.json — view",
-			"  3) Scenario builder (burst/pairs/curve)",
-			"  4) Plan from config.json — run",
-			"  5) Plan from config.json — view",
-			"  6) Diagnostics",
-			"  q) Back to the main menu",
+			tx("--- Advanced tools ---"),
+			tx("  1) Scenario from config.json — run"),
+			tx("  2) Scenario from config.json — view"),
+			tx("  3) Scenario builder (burst/pairs/curve)"),
+			tx("  4) Plan from config.json — run"),
+			tx("  5) Plan from config.json — view"),
+			tx("  6) Diagnostics"),
+			tx("  7) About this tool — the words, the limits, the records"),
+			tx("  q) Back to the main menu"),
 		}
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Action [q]: ")
+		ui.screenPrompt(lines, tx("Action [q]: "))
 
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
+		choice, eof := navChoice(in, ui, lines, tx("Action [q]: "), "q")
+		if eof {
 			fmt.Println()
 			return 0
 		}
@@ -563,8 +631,13 @@ func settingsMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, worst *int)
 			if code := diagnosticsMenu(in, ui, cfg, worst); code != 0 {
 				return code
 			}
+		case "7":
+			// R39: the About screen - the fixed vocabulary behind
+			// every screen, in labeled sections. It prints only; it
+			// reads no machine state and runs nothing.
+			aboutScreen()
 		default:
-			bad := "Enter a number from 1 to 6, or q to go back."
+			bad := tx("Enter a number from 1 to 7, or q to go back.")
 			if ui.hasScreen() {
 				note = ui.paint(tui.FGBrightRed, bad)
 			} else {
@@ -576,6 +649,67 @@ func settingsMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, worst *int)
 	}
 }
 
+// aboutScreen is the R39 About subscreen: the fixed vocabulary behind
+// every screen, in labeled sections instead of a prose paragraph. It
+// prints only - it reads no machine state, runs nothing and writes
+// nothing - and its wording repeats the same honesty contract the
+// tests hold everywhere else: a bounded word is never widened into a
+// machine verdict.
+func aboutScreen() {
+	// R41: every line resolves through the selected language; the
+	// five result words stay in every language file exactly as here
+	// (protocol, not prose) - the i18n guards check that per file.
+	for _, l := range []string{
+		tx("--- About this tool ---"),
+		"",
+		tx("What this tool is: you run a test through it; it reads its own"),
+		tx("durable records and names what happened. It does not watch the"),
+		tx("machine between runs, and no screen here estimates health."),
+		"",
+		tx("The result words, always exactly these:"),
+		tx("  PASS       - every check the run performed matched its exact"),
+		tx("                 expectation, inside that run's coverage"),
+		tx("  FAIL       - a confirmed data mismatch or a confirmed hardware"),
+		tx("                 event was recorded"),
+		tx("  INCOMPLETE - the attempt ended before its planned work finished"),
+		tx("                 (cancelled, stopped, or it died)"),
+		tx("  UNVERIFIED - load ran, but nothing verifiable was confirmed"),
+		tx("  UNKNOWN    - the records cannot say: missing, unreadable or"),
+		tx("                 foreign. Absence is named, never shown as zero"),
+		"",
+		tx("What PASS never means: PASS is bounded to the cores, memory"),
+		tx("regions, load and time window that actually ran. It is not a"),
+		tx("claim that the machine is stable - no set of runs can say that"),
+		tx("about a whole machine; it says these checks matched, here, in"),
+		tx("this window, and each card states its own limits."),
+		"",
+		tx("Coverage: a result covers only what was actually measured."),
+		tx("Cores, regions or slots that never reported stay unknown -"),
+		tx("the tool states them instead of counting them as clean."),
+		"",
+		tx("Planned vs actual: durations on plan screens are planned at"),
+		tx("your settings - estimates, not wall-clock promises; real runs"),
+		tx("can be shorter or longer (settle, teardown and tool startup"),
+		tx("add on top)."),
+		"",
+		tx("Your records on this machine:"),
+		tx("  history/            - session manifests, run logs, journals"),
+		tx("  lastrun.json        - the repeat slot (what item 1 replays)"),
+		tx("  lastresult.json     - the receipt of the latest attempt"),
+		tx("  findings.json       - notices of unfinished attempts"),
+		tx("  config.json         - this machine's settings and registered"),
+		tx("                        external tools"),
+		tx("Nothing is ever deleted silently, and only history records are"),
+		tx("removable at all: the history cleanup (menu action c, the exact"),
+		tx("word, or history_keep) removes session records TOGETHER WITH"),
+		tx("the log and journal files those records themselves declare."),
+		tx("Any file a record does not declare stays untouched - the"),
+		tx("history view never deletes by wildcard, age or size."),
+	} {
+		fmt.Println(l)
+	}
+}
+
 // diagnosticsMenu keeps the platform inspection and developer tools
 // out of the task menu but reachable (menu plan section 3: fault,
 // soak, raw journal and friends stay explicit diagnostics, not user
@@ -584,26 +718,25 @@ func diagnosticsMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, worst *i
 	note := ""
 	for {
 		lines := []string{
-			"--- Diagnostics ---",
-			"  1) CPU topology (cores, SMT, NUMA, CCX)",
-			"  2) Algorithm list",
-			"  3) Journal: recover run results",
-			"  4) WHEA errors",
-			"  5) Leak soak (100 cycles: all modes + fault)",
-			"  6) Core-parking observation (10 s) - what the OS reports, not a claim",
-			"  7) Telemetry capabilities",
-			"  8) This build + this machine, as firmware describes it (read-only)",
-			"  q) Back",
+			tx("--- Diagnostics ---"),
+			tx("  1) CPU topology (cores, SMT, NUMA, CCX)"),
+			tx("  2) Algorithm list"),
+			tx("  3) Journal: recover run results"),
+			tx("  4) WHEA errors"),
+			tx("  5) Leak soak (100 cycles: all modes + fault)"),
+			tx("  6) Core-parking observation (10 s) - what the OS reports, not a claim"),
+			tx("  7) Telemetry capabilities"),
+			tx("  8) This build + this machine, as firmware describes it (read-only)"),
+			tx("  q) Back"),
 		}
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Action [q]: ")
+		ui.screenPrompt(lines, tx("Action [q]: "))
 
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
+		choice, eof := navChoice(in, ui, lines, tx("Action [q]: "), "q")
+		if eof {
 			fmt.Println()
 			return 0
 		}
@@ -647,7 +780,7 @@ func diagnosticsMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, worst *i
 			fmt.Println()
 			versionCmd(nil)
 		default:
-			bad := "Enter a number from 1 to 8, or q to go back."
+			bad := tx("Enter a number from 1 to 8, or q to go back.")
 			if ui.hasScreen() {
 				note = ui.paint(tui.FGBrightRed, bad)
 			} else {
@@ -688,78 +821,106 @@ func categoryAccent(cat catalog.Category) string {
 	return ""
 }
 
-// cardLine lays out one profile row: number, title, and the summary
-// clipped to the visible width (menu plan section 7: one short
-// description line in the list; the unclipped summaries and the long
-// Details sit behind the "Detailed description" choice). The
-// unavailable mark is text, never color alone.
-func cardLine(n int, title, summary string, unavailable bool, cols int) string {
+// cardLines lays out one profile row (R40, owner-named: "this menu
+// should have short names and one line very short description"): the
+// first line carries the number, the title and the text unavailable
+// mark (never color alone) — nothing else; the second line is the
+// card's Short facet, one row at normal width. The cost line and the
+// full explanation do NOT live in the list (the owner rejected the
+// repeated "planned at your settings" noise): they sit on the card's
+// own screen, which the number opens. Detail still grows in exactly
+// one direction (short row → card screen → full contract), never
+// backwards.
+func cardLines(n int, c catalog.Profile, cols int) []string {
 	prefix := fmt.Sprintf("  %d) ", n)
 	mark := ""
-	if unavailable {
-		mark = " (unavailable)"
+	if c.Availability != catalog.Available {
+		mark = tx(" (unavailable)")
 	}
-	head := prefix + title + mark
-	avail := cols - tui.DisplayWidth(head+" — ")
-	if avail < 8 {
-		return head // no room for a summary: the title alone still names the goal
+	lines := []string{prefix + tx(c.Title) + mark}
+	if f, ok := catalog.FacetsFor(c.ID); ok && f.Short != "" {
+		lines = append(lines, wrapLines(tx(f.Short), cols)...)
 	}
-	return head + " — " + tui.Truncate(summary, avail)
+	return lines
 }
 
-// detailsSubmenu reads the full description of a category's cards. Its
-// rows carry MORE than the parent menu's clipped one-liners: number,
-// title, the text unavailable mark, and the FULL summary wrapped over
-// continuation lines. A pick adds the long Details text and, for an
-// unavailable goal, its recorded Reason. Detail grows in exactly one
-// direction - clipped showcase → full summaries → full contract -
-// never the old backwards step where the "detailed" screen showed
-// bare titles while the main screen already carried summaries (the
-// owner: "на первом экране я вижу более подробное описание, чем в
-// детальном"). A card without a Details text never renders empty:
-// its recorded reason is the content. (menu plan section 7.)
-func detailsSubmenu(in *bufio.Reader, ui *screenUI, cards []catalog.Profile) {
-	for {
-		cols := ui.width()
-		lines := []string{"--- Detailed description ---"}
-		for i, c := range cards {
-			mark := ""
-			if c.Availability != catalog.Available {
-				mark = " (unavailable)" // text, never color alone
-			}
-			lines = append(lines, fmt.Sprintf("  %d) %s%s", i+1, c.Title, mark))
-			lines = append(lines, wrapLines(c.Summary, cols-5)...)
-		}
-		lines = append(lines, "  q) Back")
-		ui.screenPrompt(lines, "Profile [q]: ")
-
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
-			fmt.Println()
-			return
-		}
-		if choice == "" || choice == "q" || choice == "0" {
-			return
-		}
-		idx, err := strconv.Atoi(choice)
-		if err != nil || idx < 1 || idx > len(cards) {
-			continue
-		}
-		c := cards[idx-1]
-		fmt.Printf("\n%s\n%s\n", c.Title, c.Summary)
-		if c.Details != "" {
-			fmt.Printf("\n%s\n", c.Details)
-		}
-		if c.Availability != catalog.Available {
-			// The recorded reason belongs to the description: an
-			// unavailable goal says why, right here, in its own
-			// words - the same words the parent menu states on a
-			// direct pick.
-			fmt.Println("\n" + ui.paint(tui.FGBrightRed, "Not available: "+c.Reason))
-		}
-		ui.waitForEnter(in)
+// costMarker states, on the CARD SCREEN only (R40), what a run will
+// cost AT THIS MACHINE'S SETTINGS — durations and budgets are read
+// from the live configuration, so the line explains itself instead
+// of standing as bare noise in a list. The one exception is the
+// bounded quick check, whose plan is fixed and named.
+func costMarker(c catalog.Profile) string {
+	if c.ID == "quick-check" {
+		return tx("~21 s planned load + setup")
 	}
+	return tx("durations and budgets come from your settings - the plan screen shows the real numbers before anything starts")
+}
+
+// cardScreen is the R40 middle level (owner: the separate "Detailed
+// description" item is gone - the card's own number opens its screen,
+// and Enter there continues into the run flow). It prints only: it
+// collects nothing, saves nothing and starts nothing. Its return
+// value is consent: true ONLY for an available card whose operator
+// pressed Enter; any other input and EOF are back, never consent -
+// the unavailable refusal still happens before anything is collected
+// or saved.
+//
+// The screen carries the FULL summary wrapped over continuation
+// lines, the facet block (when / catches / "PASS means / limits"),
+// the planned-cost line (it lives here alone; the list carries
+// none), the long Details contract and the machine landmark - the
+// LAST attempt on this machine, never the last PASS. A card without
+// a Details text never renders empty: its recorded reason is the
+// content. Detail grows in exactly one direction - short row → this
+// screen → full contract - never the old backwards step the owner
+// complained about ("на первом экране я вижу более подробное
+// описание, чем в детальном").
+func cardScreen(in *bufio.Reader, ui *screenUI, c catalog.Profile) bool {
+	cols := ui.width()
+	lines := []string{"--- " + tx(c.Title) + " ---", ""}
+	lines = append(lines, wrapLines(tx(c.Summary), cols)...)
+	if f, ok := catalog.FacetsFor(c.ID); ok {
+		// The facet block keeps the R39 accepted labels; it explains
+		// the card, never replaces it, and every limit already
+		// recorded in Summary/Details stays.
+		lines = append(lines, "", tx("When: ")+tx(f.UseWhen), "", tx("Catches: ")+tx(f.Catches), "", tx("PASS means / limits: ")+tx(f.Limits))
+	}
+	lines = append(lines, "", tx("Planned cost: ")+costMarker(c))
+	if c.Details != "" {
+		// The contract arrives as multi-paragraph text; each line
+		// becomes its own frame line (the frame never carries an
+		// element with an embedded newline).
+		lines = append(lines, "")
+		for _, p := range strings.Split(c.Details, "\n") {
+			lines = append(lines, tx(p))
+		}
+	}
+	// The machine landmark under the contract - the LAST attempt on
+	// this machine for this card (not the last PASS), or the honest
+	// absence, never a zeroed "never tested".
+	lines = append(lines, "", observationSummary(c.ID))
+	if c.Availability != catalog.Available {
+		// The recorded reason belongs to the description: an
+		// unavailable goal says why, right here, in its own words.
+		lines = append(lines, "", ui.paint(tui.FGBrightRed, tx("Not available: ")+tx(c.Reason)))
+		ui.screenPrompt(lines, tx("Press Enter to return to the list"))
+		_, _ = in.ReadString('\n')
+		return false
+	}
+	// Sol review discriminator (R40): this screen is drawn AS a
+	// frame, not appended under the category's. The resize watcher
+	// then redraws THIS card screen if the window changes while the
+	// answer is pending - Enter can never consent against a stale
+	// category frame (the old detailsSubmenu direct-print carried
+	// the same stale-frame risk; on the consent path it became
+	// real). Non-vacuity proven: with the old direct-print shape
+	// this package's TestCardScreenOwnsFrameOnResize fails.
+	ui.screenPrompt(lines, tx("Enter: run this - anything else: back"))
+	line, readErr := in.ReadString('\n')
+	if readErr != nil || strings.TrimSpace(line) != "" {
+		return false // back, never consent
+	}
+	return true
 }
 
 // wrapLines word-wraps s into continuation lines of at most width
@@ -812,27 +973,27 @@ func categoryMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sy
 		lines := []string{ui.paint(accent, "--- "+title+" ---")}
 		cols := ui.width()
 		for i, c := range cards {
-			lines = append(lines, cardLine(i+1, c.Title, c.Summary, c.Availability != catalog.Available, cols))
+			lines = append(lines, cardLines(i+1, c, cols)...)
 		}
-		// One flat screen: every profile of the category, the manual
-		// registry choice, and the detailed descriptions. The old
-		// "Extended profiles" sub-level is gone by owner decision
-		// (2026-11-09): it held two cards and hid the manual choice,
-		// a nesting whose only effect was to make the useful things
-		// harder to reach.
+		// One flat screen: every profile of the category and the
+		// manual registry choice. The old "Extended profiles"
+		// sub-level is gone by owner decision (2026-11-09): it held
+		// two cards and hid the manual choice, a nesting whose only
+		// effect was to make the useful things harder to reach. The
+		// separate "Detailed description" item is gone by the R40
+		// owner decision: each card's own number opens its screen,
+		// and Enter on that screen runs - no side door, no second
+		// list of the same cards.
 		next := len(cards) + 1
-		lines = append(lines, fmt.Sprintf("  %d) Manually pick an algorithm or an external engine", next))
-		detailsIdx := next + 1
-		lines = append(lines, fmt.Sprintf("  %d) Detailed description", detailsIdx), "  q) Back")
+		lines = append(lines, fmt.Sprintf(tx("  %d) Manually pick an algorithm or an external engine"), next), tx("  q) Back"))
 		if note != "" {
 			lines = append(lines, "", note)
 			note = ""
 		}
-		ui.screenPrompt(lines, "Profile [q]: ")
+		ui.screenPrompt(lines, tx("Profile [q]: "))
 
-		line, readErr := in.ReadString('\n')
-		choice := strings.ToLower(strings.TrimSpace(line))
-		if readErr != nil && choice == "" {
+		choice, eof := navChoice(in, ui, lines, tx("Profile [q]: "), "q")
+		if eof {
 			fmt.Println()
 			return 0 // back out; the outer menu turns exhausted input into quit
 		}
@@ -840,17 +1001,13 @@ func categoryMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sy
 			return 0
 		}
 		idx, err := strconv.Atoi(choice)
-		if err != nil || idx < 1 || idx > detailsIdx {
-			bad := "Enter a number from 1 to " + strconv.Itoa(detailsIdx) + " or q to go back."
+		if err != nil || idx < 1 || idx > next {
+			bad := fmt.Sprintf(tx("Enter a number from 1 to %d or q to go back."), next)
 			if ui.hasScreen() {
 				note = ui.paint(tui.FGBrightRed, bad)
 			} else {
 				ui.note(ui.paint(tui.FGBrightRed, bad))
 			}
-			continue
-		}
-		if idx == detailsIdx {
-			detailsSubmenu(in, ui, cards)
 			continue
 		}
 		if idx == next {
@@ -870,12 +1027,12 @@ func categoryMenu(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sy
 			continue
 		}
 		card := cards[idx-1]
-		if card.Availability != catalog.Available {
-			// The refusal is the card's own recorded Reason, stated in
-			// red plus text before anything is collected or saved.
-			fmt.Println()
-			fmt.Println(ui.paint(tui.FGBrightRed, card.Title+" is not available: "+card.Reason))
-			ui.waitForEnter(in)
+		// R40: the number opens the card's own screen ("show me"),
+		// and only Enter on an AVAILABLE card continues into the run
+		// flow. An unavailable goal states its recorded Reason on
+		// that screen and never continues: the refusal still happens
+		// before any collection, save or load (menu plan section 2).
+		if !cardScreen(in, ui, card) {
 			continue
 		}
 		before := lastAttemptID()
@@ -921,8 +1078,8 @@ func startSessionProfile(in *bufio.Reader, ui *screenUI, cfg config.Config, topo
 	if card.Shape == catalog.ShapeSessionPerCore {
 		mode = sessionPerCore
 	}
-	w := newWizard(in, ui, card.Title)
-	fmt.Printf("%s — %s\n", card.Title, card.Summary)
+	w := newWizard(in, ui, tx(card.Title))
+	fmt.Printf("%s — %s\n", tx(card.Title), tx(card.Summary))
 	session, ok := collectSessionParams(w, cfg, topology, mode, card.Workload)
 	if !ok {
 		return 0
@@ -947,7 +1104,7 @@ func confirmSession(w *wizard, ui *screenUI, topology sysinfo.Topology, session 
 	}
 	w.showPlan(strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"))
 	if !w.confirm() {
-		fmt.Println("Run cancelled. No load was started.")
+		fmt.Println(tx("Run cancelled. No load was started."))
 		return false
 	}
 	return true
@@ -1007,21 +1164,46 @@ func startPresetProfile(in *bufio.Reader, ui *screenUI, cfg config.Config, profi
 		// for ram sessions ("почему в других ситуациях [auto]
 		// работает, а тут нет такого?"). The answer applies to THIS
 		// run only; config.json is never rewritten from here.
-		fmt.Printf("profile %q verifies memory regions and needs a memory budget.\n", p.Name)
-		fmt.Println("It applies to this run only - to keep it, set \"memory\" in config.json.")
+		fmt.Printf(tx("profile %q verifies memory regions and needs a memory budget.\n"), p.Name)
+		fmt.Println(tx("It applies to this run only - to keep it, set \"memory\" in config.json."))
 		for {
-			value := ask(in, "Memory budget (\"auto\" or an exact size like 2GiB)", "auto")
+			value := ask(in, tx("Memory budget (\"auto\", \"max\", or an exact size like 2GiB)"), "auto")
 			if strings.EqualFold(value, "q") {
-				fmt.Println("Run cancelled. No load was started.")
+				fmt.Println(tx("Run cancelled. No load was started."))
 				return 0
 			}
 			if err := plan.ValidateMemorySettings(value, cfg.MemoryLock); err != nil {
-				fmt.Printf("Invalid memory budget: %v\n", err)
+				fmt.Printf(tx("Invalid memory budget: %v\n"), err)
 				continue
 			}
 			cfg.Memory = value
 			break
 		}
+	}
+	// R27 (owner complaint 2026-11-12: "смешанный/сложный тест нельзя
+	// настроить время или количество циклов"): the preset path asked
+	// nothing about the run shape - phase durations came only from
+	// config.json and the menu always ran the list exactly once. The
+	// answers apply to THIS run only (config.json is never rewritten
+	// from here). The duration fills the existing "empty = config
+	// duration" slot for phases that carry no fixed time of their own,
+	// so presets that promise a fixed window (quick-check's 10s+10s)
+	// keep their promise and the screen says which phases inherit.
+	// Cycles repeat the whole phase list: the field already exists in
+	// the saved recipe (lastRun.Cycles), the plan hash already covers
+	// it, and the replay path already honors it - the menu was the
+	// only place that never asked.
+	w := newWizard(in, ui, tx("Preset: ")+tx(profile.Title))
+	duration := w.askDuration(tx("Duration"), tx("Duration of each run for phases with no fixed time (fixed-time phases keep theirs)"), cfg.Duration)
+	if duration <= 0 {
+		fmt.Println(tx("Run cancelled. No load was started."))
+		return 0
+	}
+	cfg.Duration = duration.String()
+	cycles := w.askPositiveInt(tx("Cycles"), tx("Repetitions of the whole phase list"), max(1, p.SuggestCycles))
+	if cycles <= 0 {
+		fmt.Println(tx("Run cancelled. No load was started."))
+		return 0
 	}
 	cfg.Phases = p.Phases(cfg)
 	fmt.Printf("preset %q: %s\n", p.Name, p.Description)
@@ -1041,16 +1223,15 @@ func startPresetProfile(in *bufio.Reader, ui *screenUI, cfg config.Config, profi
 		}
 		return 2
 	}
-	w := newWizard(in, ui, "Preset: "+profile.Title)
 	var buf bytes.Buffer
-	printScenarioPlan(&buf, cfg, opts, 1)
+	printScenarioPlan(&buf, cfg, opts, cycles)
 	w.showPlan(strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"))
 	if !w.confirm() {
-		fmt.Println("Run cancelled. No load was started.")
+		fmt.Println(tx("Run cancelled. No load was started."))
 		return 0
 	}
-	lr := scenarioRecipe(cfg, 1, nil, false, p.Name)
-	return runScenarioRequest(lr, opts, 1, -1, false, ui, true)
+	lr := scenarioRecipe(cfg, cycles, nil, false, p.Name)
+	return runScenarioRequest(lr, opts, cycles, -1, false, ui, true)
 }
 
 // configureSession drives the wizard up to and including the confirm
@@ -1062,11 +1243,11 @@ func startPresetProfile(in *bufio.Reader, ui *screenUI, cfg config.Config, profi
 // the executor's preflight refusal, which the menu would treat as a
 // fatal setup error and close the whole menu on top.
 func configureSession(in *bufio.Reader, ui *screenUI, cfg config.Config, topology sysinfo.Topology) (SessionOptions, bool) {
-	w := newWizard(in, ui, "Configure and start a test")
+	w := newWizard(in, ui, tx("Configure and start a test"))
 
-	modeIndex := w.choose("Test mode", "Choose a mode", []string{
-		"All-core — load all selected physical cores at the same time",
-		"Per-core — test the selected physical cores one after another",
+	modeIndex := w.choose(tx("Test mode"), tx("Choose a mode"), []string{
+		tx("All-core — load all selected physical cores at the same time"),
+		tx("Per-core — test the selected physical cores one after another"),
 	}, 1)
 	if modeIndex < 0 {
 		return SessionOptions{}, false
@@ -1154,28 +1335,28 @@ func collectSessionParams(w *wizard, cfg config.Config, topology sysinfo.Topolog
 
 	nPhysical := len(topology.PhysicalCores)
 	w.hints = []string{
-		fmt.Sprintf("Detected %d physical cores, numbered 0 through %d.", nPhysical, nPhysical-1),
-		"Enter a list such as 1,2,5-8,12. Ranges are inclusive; 'all' selects every core.",
+		fmt.Sprintf(tx("Detected %d physical cores, numbered 0 through %d."), nPhysical, nPhysical-1),
+		tx("Enter a list such as 1,2,5-8,12. Ranges are inclusive; 'all' selects every core."),
 	}
 	if !w.ui.hasScreen() {
-		fmt.Println("\nPhysical cores")
+		fmt.Println("\n" + tx("Physical cores"))
 		for _, hint := range w.hints {
 			fmt.Println(hint)
 		}
 	}
 	var physicalCores []int
 	for {
-		value := w.promptLine("Physical cores", "all")
+		value := w.promptLine(tx("Physical cores"), "all")
 		selected, err := parseNumberSet(value, nPhysical)
 		if err == nil {
 			physicalCores = selected
-			w.record("Physical cores", value)
+			w.record(tx("Physical cores"), value)
 			break
 		}
 		if w.ui.hasScreen() {
-			w.note = fmt.Sprintf("Invalid core selection: %v", err)
+			w.note = fmt.Sprintf(tx("Invalid core selection: %v"), err)
 		} else {
-			fmt.Printf("Invalid core selection: %v\n", err)
+			fmt.Printf(tx("Invalid core selection: %v\n"), err)
 		}
 	}
 	w.hints = nil
@@ -1183,13 +1364,13 @@ func collectSessionParams(w *wizard, cfg config.Config, topology sysinfo.Topolog
 	threadsPerCore := 1
 	if selectedHaveSMT(topology, physicalCores) {
 		w.hints = []string{
-			"One thread per core runs each physical core's single best thread: cooler, higher boost,",
-			"and faults point at one physical core. Two threads load both SMT siblings of every",
-			"core: maximum total stress (and much longer Prime95 iterations).",
+			tx("One thread per core runs each physical core's single best thread: cooler, higher boost,"),
+			tx("and faults point at one physical core. Two threads load both SMT siblings of every"),
+			tx("core: maximum total stress (and much longer Prime95 iterations)."),
 		}
-		threadIndex := w.choose("Threads per core", "Choose thread usage", []string{
-			"One logical CPU per physical core — lower heat and usually higher boost",
-			"All SMT siblings — load both logical CPUs of each physical core",
+		threadIndex := w.choose(tx("Threads per core"), tx("Choose thread usage"), []string{
+			tx("One logical CPU per physical core — lower heat and usually higher boost"),
+			tx("All SMT siblings — load both logical CPUs of each physical core"),
 		}, 0)
 		if threadIndex < 0 {
 			return SessionOptions{}, false
@@ -1200,12 +1381,12 @@ func collectSessionParams(w *wizard, cfg config.Config, topology sysinfo.Topolog
 		w.hints = nil
 	}
 
-	duration := w.askDuration("Duration", "Duration of each run", cfg.Duration)
+	duration := w.askDuration(tx("Duration"), tx("Duration of each run"), cfg.Duration)
 	if duration <= 0 {
 		return SessionOptions{}, false
 	}
 
-	passes := w.askPositiveInt("Passes", "Number of complete passes", 1)
+	passes := w.askPositiveInt(tx("Passes"), tx("Number of complete passes"), 1)
 	if passes <= 0 {
 		return SessionOptions{}, false
 	}
@@ -1226,26 +1407,28 @@ func collectSessionParams(w *wizard, cfg config.Config, topology sysinfo.Topolog
 			def = "auto"
 		}
 		w.hints = []string{
-			"RAM verification needs a memory budget: 'auto' (a bounded share of free",
-			"RAM, reserving room for the OS) or an exact size such as 2GiB.",
+			tx("RAM verification needs a memory budget: 'auto' (a bounded share of free"),
+			tx("RAM, reserving room for the OS), 'max' (drops only that share cap - the"),
+			tx("OS/commit reserves still bind), or an exact size such as 2GiB."),
+			tx("The plan screen shows the computed bytes and which constraint binds."),
 		}
 		if !w.ui.hasScreen() {
-			fmt.Println("\nMemory budget")
+			fmt.Println("\n" + tx("Memory budget"))
 			for _, hint := range w.hints {
 				fmt.Println(hint)
 			}
 		}
 		for {
-			value := w.promptLine("Memory budget", def)
+			value := w.promptLine(tx("Memory budget"), def)
 			if strings.EqualFold(strings.TrimSpace(value), "q") {
 				return SessionOptions{}, false
 			}
 			if err := plan.ValidateMemorySettings(value, session.MemoryLock); err == nil {
 				session.Memory = strings.TrimSpace(value)
-				w.record("Memory budget", value)
+				w.record(tx("Memory budget"), value)
 				break
 			} else {
-				w.note = fmt.Sprintf("Invalid memory budget: %v", err)
+				w.note = fmt.Sprintf(tx("Invalid memory budget: %v"), err)
 			}
 		}
 		w.hints = nil
@@ -1258,7 +1441,7 @@ func choose(in *bufio.Reader, prompt string, items []string, def int) int {
 		fmt.Printf("  %d) %s\n", i+1, item)
 	}
 	for {
-		fmt.Printf("%s [%d] (q=back): ", prompt, def+1)
+		fmt.Printf(tx("%s [%d] (q=back): "), prompt, def+1)
 		line, _ := in.ReadString('\n')
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1270,7 +1453,7 @@ func choose(in *bufio.Reader, prompt string, items []string, def int) int {
 		if n, err := strconv.Atoi(line); err == nil && n >= 1 && n <= len(items) {
 			return n - 1
 		}
-		fmt.Printf("Enter a number from 1 to %d, or q to go back.\n", len(items))
+		fmt.Printf(tx("Enter a number from 1 to %d, or q to go back.\n"), len(items))
 	}
 }
 
@@ -1285,7 +1468,7 @@ func chooseWorkload(in *bufio.Reader, defaultName string) (string, bool) {
 			def = i
 		}
 	}
-	selected := choose(in, "Choose an algorithm", items, def)
+	selected := choose(in, tx("Choose an algorithm"), items, def)
 	if selected < 0 {
 		return "", false
 	}
@@ -1326,7 +1509,7 @@ func ask(in *bufio.Reader, prompt, def string) string {
 
 func askDuration(in *bufio.Reader, prompt, defaultValue string) time.Duration {
 	for {
-		value := ask(in, prompt+" (examples: 30s, 5m, 1h)", defaultValue)
+		value := ask(in, prompt+tx(" (examples: 30s, 5m, 1h)"), defaultValue)
 		if strings.EqualFold(value, "q") {
 			return 0
 		}
@@ -1334,7 +1517,7 @@ func askDuration(in *bufio.Reader, prompt, defaultValue string) time.Duration {
 		if err == nil && duration > 0 {
 			return duration
 		}
-		fmt.Println("Enter a positive duration such as 30s, 5m, or 1h; q goes back.")
+		fmt.Println(tx("Enter a positive duration such as 30s, 5m, or 1h; q goes back."))
 	}
 }
 
@@ -1348,12 +1531,12 @@ func askPositiveInt(in *bufio.Reader, prompt string, defaultValue int) int {
 		if err == nil && n > 0 {
 			return n
 		}
-		fmt.Println("Enter a positive whole number; q goes back.")
+		fmt.Println(tx("Enter a positive whole number; q goes back."))
 	}
 }
 
 func waitForEnter(in *bufio.Reader) {
-	fmt.Print("\nPress Enter to return to the menu...")
+	fmt.Print("\n" + tx("Press Enter to return to the menu..."))
 	_, _ = in.ReadString('\n')
 	fmt.Println()
 }

@@ -48,7 +48,15 @@ func TestParseRequest(t *testing.T) {
 	if r, err := ParseRequest("auto"); err != nil || !r.Auto {
 		t.Errorf(`ParseRequest("auto") = %+v, %v; want auto, nil`, r, err)
 	}
-	if r, err := ParseRequest("512MiB"); err != nil || r.Auto || r.Bytes != 512<<20 {
+	// R28: "max" is a distinct mode - it must not be confused with
+	// auto (which keeps the percent cap) or with a fixed size.
+	if r, err := ParseRequest("max"); err != nil || !r.Max || r.Auto {
+		t.Errorf(`ParseRequest("max") = %+v, %v; want max, nil`, r, err)
+	}
+	if r, err := ParseRequest(" MAX "); err != nil || !r.Max {
+		t.Errorf(`ParseRequest(" MAX ") = %+v, %v; want max, nil`, r, err)
+	}
+	if r, err := ParseRequest("512MiB"); err != nil || r.Auto || r.Max || r.Bytes != 512<<20 {
 		t.Errorf(`ParseRequest("512MiB") = %+v, %v; want fixed 512MiB`, r, err)
 	}
 	if _, err := ParseRequest("0"); err == nil {
@@ -117,6 +125,112 @@ func TestComputeBudgetAutoNeedsObservations(t *testing.T) {
 	}
 	if _, err := ComputeBudget(Request{Auto: true}, sysinfo.MemorySnapshot{}, DefaultTrialParams()); err == nil {
 		t.Error("auto budget accepted with no observations at all")
+	}
+}
+
+// R28 ("max" mode, owner complaint 2026-11-12): max removes ONLY the
+// percentage cap. The OS reserve, the commit reserve and every honest
+// refusal of the auto rule stay exactly as they are - a machine that
+// auto refuses, max refuses too, with the same named constraint.
+func TestComputeBudgetMax(t *testing.T) {
+	p := DefaultTrialParams() // min 4GiB OS reserve, 2GiB commit reserve
+	cases := []struct {
+		name   string
+		snap   sysinfo.MemorySnapshot
+		want   uint64
+		wantOK bool
+	}{
+		// avail 40 of 94 installed: 70% would cap at 28, but max
+		// takes the floor of availPhys-reserve instead:
+		// 40GiB - ceil(94GiB/10) = 32856499814 (9.4 GiB reserve
+		// rounded up to the byte).
+		{"percent cap removed", snap(94, 40, 40, 40), 32856499814, true},
+		// the physical reserve still binds: avail 20 - 9.4 GiB
+		// reserve = 11381663334 (the identical number auto computes
+		// when the reserve is what binds).
+		{"physical reserve binds", snap(94, 20, 40, 40), 11381663334, true},
+		// the commit reserve still binds even when physical has room:
+		// free commit 5 - 2 GiB reserve = 3.
+		{"commit reserve binds", snap(94, 40, 40, 5), 3 << 30, true},
+		// avail below the OS reserve: refused, not zero.
+		{"avail below reserve", snap(94, 9, 40, 30), 0, false},
+		// free commit below the commit reserve: refused.
+		{"commit below reserve", snap(94, 40, 40, 1), 0, false},
+		// small machine: 8 GiB installed -> reserve max(4, 1) = 4;
+		// avail 6 - 4 = 2 (same as auto here: the pct cap never
+		// bound, so max changes nothing).
+		{"small machine unchanged", snap(8, 6, 10, 10), 2 << 30, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b, err := ComputeBudget(Request{Max: true}, c.snap, p)
+			if (err == nil) != c.wantOK {
+				t.Fatalf("err = %v, wantOK %v", err, c.wantOK)
+			}
+			if err == nil && b.Bytes != c.want {
+				t.Errorf("budget = %d, want %d (rule: %s)", b.Bytes, c.want, b.Rule)
+			}
+			if err != nil && strings.Contains(err.Error(), "0 B") && c.wantOK {
+				t.Errorf("refusal should not masquerade as a zero budget: %v", err)
+			}
+		})
+	}
+}
+
+// max must never be larger than auto's floors allow, must state its
+// own rule (not masquerade as auto), and must name the constraint
+// that actually binds the number it shows.
+func TestComputeBudgetMaxStaysHonest(t *testing.T) {
+	p := DefaultTrialParams()
+	s := snap(94, 40, 40, 30) // free commit 30 makes commit bind
+	auto, err := ComputeBudget(Request{Auto: true}, s, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxB, err := ComputeBudget(Request{Max: true}, s, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// commit binds both: max here must EQUAL auto, never exceed the
+	// floors, and it must not inherit auto's percent-cap number.
+	if maxB.Bytes != auto.Bytes {
+		t.Errorf("max = %d, want %d (commit binds both)", maxB.Bytes, auto.Bytes)
+	}
+	if !strings.HasPrefix(maxB.Rule, "max:") {
+		t.Errorf("max rule masquerades as something else: %q", maxB.Rule)
+	}
+	if !strings.Contains(maxB.Rule, "binding=free-commit-minus-commit-reserve") {
+		t.Errorf("max rule does not name the binding commit constraint: %q", maxB.Rule)
+	}
+	// And when the percent cap is what binds auto, max must exceed
+	// auto but stay under the physical floor.
+	s2 := snap(94, 40, 40, 40)
+	auto2, err := ComputeBudget(Request{Auto: true}, s2, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	max2, err := ComputeBudget(Request{Max: true}, s2, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if max2.Bytes <= auto2.Bytes {
+		t.Errorf("max %d did not exceed the percent-capped auto %d", max2.Bytes, auto2.Bytes)
+	}
+	if !strings.Contains(max2.Rule, "binding=available-physical-minus-OS-reserve") {
+		t.Errorf("max rule does not name the binding physical constraint: %q", max2.Rule)
+	}
+}
+
+// max on an unobserved machine is refused exactly like auto: there is
+// no number to take the maximum of, and pretending otherwise would
+// invent a budget nobody measured.
+func TestComputeBudgetMaxNeedsObservations(t *testing.T) {
+	physOnly := sysinfo.MemorySnapshot{Known: true, TotalPhys: 64 << 30, AvailPhys: 30 << 30}
+	if _, err := ComputeBudget(Request{Max: true}, physOnly, DefaultTrialParams()); err == nil {
+		t.Error("max budget accepted without commit observations")
+	}
+	if _, err := ComputeBudget(Request{Max: true}, sysinfo.MemorySnapshot{}, DefaultTrialParams()); err == nil {
+		t.Error("max budget accepted with no observations at all")
 	}
 }
 

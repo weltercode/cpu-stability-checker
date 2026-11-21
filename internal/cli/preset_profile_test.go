@@ -148,6 +148,84 @@ func TestStartPresetProfileCancelSavesNothing(t *testing.T) {
 	}
 }
 
+// R27 (owner complaint 2026-11-12: the mixed/complex preset could not
+// be given a time or a cycle count): the preset path now asks both,
+// and the answers reach the plan screen - duration fills the
+// "empty = config duration" slot for the generated phases, cycles
+// repeat the whole list. q at the cycles prompt cancels with nothing
+// saved, exactly like every other wizard step.
+func TestStartPresetProfileAsksDurationAndCycles(t *testing.T) {
+	chdirTemp(t)
+	card, ok := catalog.Get("ram-extended")
+	if !ok {
+		t.Fatal("frozen card set lost ram-extended")
+	}
+	cfg := config.Default()
+	cfg.Memory = "64MiB" // never allocated: this test always cancels before load
+
+	out := captureStdout(t, func() {
+		code := startPresetProfile(bufio.NewReader(strings.NewReader("1m\n2\nn\n")), newScreenUI(os.Stdout), cfg, card)
+		if code != 0 {
+			t.Fatalf("confirm-cancel exit = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, "Repetitions of the whole phase list") {
+		t.Errorf("cycles prompt missing:\n%s", out)
+	}
+	if !strings.Contains(out, "x 2 cycle(s)") {
+		t.Errorf("asked cycles did not reach the plan screen:\n%s", out)
+	}
+	if !strings.Contains(out, "planned clock windows across 2 cycle(s)") {
+		t.Errorf("plan screen never stated the whole multi-cycle clock up front:\n%s", out)
+	}
+	if !strings.Contains(out, "1m0s") {
+		t.Errorf("asked duration did not reach the phase lines:\n%s", out)
+	}
+	if _, err := os.Stat(lastrunPath); !os.IsNotExist(err) {
+		t.Error("a cancelled preset saved a recipe")
+	}
+
+	// q at the new cycles step is a clean cancel: no recipe, no
+	// receipt, no load.
+	out = captureStdout(t, func() {
+		code := startPresetProfile(bufio.NewReader(strings.NewReader("1m\nq\n")), newScreenUI(os.Stdout), cfg, card)
+		if code != 0 {
+			t.Fatalf("cycles-cancel exit = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, "Run cancelled. No load was started.") {
+		t.Errorf("cycles-cancel wording:\n%s", out)
+	}
+	if _, err := os.Stat(lastrunPath); !os.IsNotExist(err) {
+		t.Error("cycles-cancel saved a recipe")
+	}
+}
+
+// The duration answer honors fixed-time promises: quick-check's 10s
+// phases are the preset's stated promise and the knob never overwrites
+// them - the override only fills phases that inherit the config
+// duration. (Honesty rule: the screen's promise survives the form.)
+func TestStartPresetProfileKnobKeepsFixedPromises(t *testing.T) {
+	chdirTemp(t)
+	card, ok := catalog.Get("quick-check")
+	if !ok {
+		t.Fatal("frozen card set lost quick-check")
+	}
+	cfg := config.Default()
+	out := captureStdout(t, func() {
+		code := startPresetProfile(bufio.NewReader(strings.NewReader("5m\n\nn\n")), newScreenUI(os.Stdout), cfg, card)
+		if code != 0 {
+			t.Fatalf("confirm-cancel exit = %d, want 0", code)
+		}
+	})
+	if strings.Contains(out, "duration=5m0s") {
+		t.Errorf("the knob overwrote quick-check's fixed 10s promises:\n%s", out)
+	}
+	if strings.Count(out, "duration=10s") < 2 {
+		t.Errorf("quick-check's promised 10s phases vanished from the plan:\n%s", out)
+	}
+}
+
 // The shared scenario recipe stamps the request id and the catalog
 // card behind the preset - the same identity the receipt binds to.
 func TestScenarioRecipeIdentity(t *testing.T) {

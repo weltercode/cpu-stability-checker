@@ -303,14 +303,27 @@ func (t *sessionTracker) finishSetup(exit int) {
 func (t *sessionTracker) finishRecord(exit int) {
 	t.m.Finished = time.Now().UTC().Format(time.RFC3339)
 	t.m.Exit = &exit
-	t.save("finalized")
+	// R37: automatic retention runs ONLY after this session's final
+	// manifest saved successfully - the just-finished session is the
+	// newest id, so it is among the kept; a started/updated save can
+	// carry an incomplete child-run list, and pruning on it could
+	// destroy evidence the still-running session may still reference.
+	if err := t.save("finalized"); err == nil {
+		pruneHistory()
+	}
 }
 
-func (t *sessionTracker) save(what string) {
+// save writes the manifest and reports honestly whether it stuck: the
+// run result never depends on it (the warning says history will miss
+// this session), but the finalize path must know before retention
+// is allowed to remove anything older.
+func (t *sessionTracker) save(what string) error {
 	if t == nil {
-		return
+		return nil
 	}
 	if err := saveSessionManifest(&t.m); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: session manifest not %s (%v); the run result itself is unaffected\n", what, err)
+		return err
 	}
+	return nil
 }

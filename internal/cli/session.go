@@ -300,13 +300,11 @@ func writeSessionPlan(w io.Writer, session SessionOptions, topology sysinfo.Topo
 	fmt.Fprintf(w, "Load algorithm: ..................... %s — %s\n", session.Workload, wl.Description)
 	if session.Memory != "" {
 		// The budget is part of the promise the user confirms: show it
-		// (and the seed for RAM families) before the first byte of load,
-		// never only in the engine's own log.
-		lock := strings.TrimSpace(session.MemoryLock)
-		if lock == "" || lock == "off" {
-			lock = "off"
-		}
-		fmt.Fprintf(w, "Memory engine: ...................... budget %s, page lock %s\n", session.Memory, lock)
+		// (and the seed for RAM families) before the first byte of
+		// load, never only in the engine's own log. R28: the raw word
+		// "auto"/"max" now carries the computed byte estimate and the
+		// binding constraint beside it.
+		memoryPlanLines(w, session.Memory, strings.TrimSpace(session.MemoryLock), session.RamSeed, "")
 		if wl.RequiresMemory {
 			fmt.Fprintf(w, "RAM test seed: ........................ %d (0 is a valid seed)\n", session.RamSeed)
 		}

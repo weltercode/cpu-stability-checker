@@ -42,6 +42,55 @@ func captureStdoutAndRun(t *testing.T, fn func()) string {
 	return <-read
 }
 
+// R39 (owner-named menu separation): the main screen is split by
+// effort with labeled sections - fast at the top, the full suites,
+// evidence and tools, Advanced tools; the quick check sits at 2 with
+// its honesty guard right under its name.
+func TestMainMenuSectionsR39(t *testing.T) {
+	chdirTemp(t)
+	out := captureStdoutAndRun(t, func() {
+		if code := menuLoop(bufio.NewReader(strings.NewReader("0\n")), config.Default()); code != 0 {
+			t.Errorf("menu exit = %d, want 0", code)
+		}
+	})
+	for _, want := range []string{
+		"Fast — a bounded pass for first words (minutes):",
+		"2) Quick check (bounded) — ~21 s planned load + setup",
+		"a clean word here is NOT a stability verdict",
+		"Full test suites — longer runs, deeper evidence:",
+		"3) CPU check",
+		"4) RAM check",
+		"5) Mixed CPU + RAM tests",
+		"Evidence and tools — what was recorded, and the detailed controls:",
+		"6) Session history and reports",
+		"7) View findings - none unread",
+		"8) Advanced tools (scenario/plan runs, diagnostics, About)",
+		"0) Quit",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("main menu lost %q:\n%s", want, out)
+		}
+	}
+}
+
+// The promoted item 2 is the SAME card route the category screen
+// uses: it opens the quick-check plan (its phase names appear), and
+// "n" at the confirm arms nothing and saves nothing.
+func TestQuickCheckAtTwoUsesOneExecutor(t *testing.T) {
+	chdirTemp(t)
+	out := captureStdoutAndRun(t, func() {
+		if code := menuLoop(bufio.NewReader(strings.NewReader("2\n\n\nn\n0\n")), config.Default()); code != 0 {
+			t.Errorf("menu exit = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(strings.ToLower(out), "quick check") {
+		t.Errorf("item 2 did not open the quick-check plan:\n%s", out)
+	}
+	if _, err := os.Stat(lastrunPath); !os.IsNotExist(err) {
+		t.Error("a cancelled quick-check at the main menu saved a recipe")
+	}
+}
+
 // Enter on a fresh machine must not start anything (menu plan section
 // 1: the shortcut only exists over a real recipe); the screen says
 // there is no previous test and the menu waits.
@@ -74,10 +123,12 @@ func TestRamExtendedPresetSelectableCancelSavesNothing(t *testing.T) {
 	if card.Availability != catalog.Available || card.Preset != "ram-extended" {
 		t.Fatalf("ram-extended = %s preset=%q, want an available preset card after P07f", card.Availability, card.Preset)
 	}
-	// "3" = RAM category, "5" = ram-extended (fifth by Order),
-	// "n" cancels at the confirm, q back, 0 quit.
+	// "4" = RAM category (R39 layout), "5" = ram-extended (fifth by
+	// Order), Enter on its card screen (R40) continues into the run
+	// flow, the R27 run-shape steps take their defaults (Enter,
+	// Enter), "n" cancels at the confirm, q back, 0 quit.
 	out := captureStdoutAndRun(t, func() {
-		code := menuLoop(bufio.NewReader(strings.NewReader("3\n5\nn\nq\n0\n")), cfg)
+		code := menuLoop(bufio.NewReader(strings.NewReader("4\n5\n\n\n\nn\nq\n0\n")), cfg)
 		if code != 0 {
 			t.Errorf("exit = %d, want 0", code)
 		}
@@ -100,10 +151,13 @@ func TestMixMenuHonestAvailability(t *testing.T) {
 	sim, _ := catalog.Get("mix-simultaneous")
 	ramTr, _ := catalog.Get("mix-transitions-on-ram")
 	out := captureStdoutAndRun(t, func() {
-		// "4" = MIX; "2" simultaneous -> Reason; Enter clears wait;
-		// "3" transitions-on-ram -> Reason; Enter; "1" comprehensive
-		// -> plan shown, "n" cancels at confirm; q back; 0 quit.
-		code := menuLoop(bufio.NewReader(strings.NewReader("4\n2\n\n3\n\n1\nn\nq\n0\n")), cfg)
+		// "5" = MIX (R39 layout); "2" simultaneous -> card screen
+		// states the Reason, Enter clears the wait (never consent);
+		// "3" transitions-on-ram -> same; "1" comprehensive -> Enter
+		// on its card screen (R40) continues -> R27 steps take
+		// defaults (Enter, Enter), "n" cancels at confirm; q back;
+		// 0 quit.
+		code := menuLoop(bufio.NewReader(strings.NewReader("5\n2\n\n3\n\n1\n\n\n\nn\nq\n0\n")), cfg)
 		if code != 0 {
 			t.Errorf("exit = %d, want 0", code)
 		}

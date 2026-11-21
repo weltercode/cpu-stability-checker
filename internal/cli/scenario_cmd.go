@@ -17,6 +17,7 @@ import (
 	"github.com/weltercode/cpu-stability-checker/internal/config"
 	"github.com/weltercode/cpu-stability-checker/internal/human"
 	"github.com/weltercode/cpu-stability-checker/internal/journal"
+	"github.com/weltercode/cpu-stability-checker/internal/memtest"
 	"github.com/weltercode/cpu-stability-checker/internal/plan"
 	"github.com/weltercode/cpu-stability-checker/internal/subprocess"
 	"github.com/weltercode/cpu-stability-checker/internal/sysinfo"
@@ -68,7 +69,7 @@ func scenarioCmdWithUI(args []string, ui *screenUI) int {
 		// (mixed) or dying mid-scenario - neither states what actually
 		// ran. The reason names the fix.
 		if p.NeedsMemory && strings.TrimSpace(cfg.Memory) == "" {
-			fmt.Fprintf(os.Stderr, "scenario: preset %q verifies memory regions and needs a memory budget: set \"memory\" in config.json (\"auto\" or an exact size like \"2GiB\"), or pick another preset\n", p.Name)
+			fmt.Fprintf(os.Stderr, "scenario: preset %q verifies memory regions and needs a memory budget: set \"memory\" in config.json (\"auto\", \"max\" or an exact size like \"2GiB\"), or pick another preset\n", p.Name)
 			return 2
 		}
 		cfg.Phases = p.Phases(cfg)
@@ -159,7 +160,7 @@ func scenarioSession(in *bufio.Reader, ui *screenUI, cfg config.Config) int {
 				return 2
 			}
 			if cand.NeedsMemory && strings.TrimSpace(cfg.Memory) == "" {
-				msg := fmt.Sprintf("preset %q verifies memory regions and needs a memory budget: set \"memory\" in config.json (\"auto\" or a size like \"2GiB\"), or pick another preset", cand.Name)
+				msg := fmt.Sprintf("preset %q verifies memory regions and needs a memory budget: set \"memory\" in config.json (\"auto\", \"max\" or a size like \"2GiB\"), or pick another preset", cand.Name)
 				if ui.hasScreen() {
 					w.note = msg
 				} else {
@@ -372,6 +373,76 @@ func compileScenario(cfg config.Config) ([]plan.Options, []string, error) {
 	return opts, notices, nil
 }
 
+// memoryPlanLines shows the memory-engine line on the screens that
+// appear just before a run is confirmed (R28, owner complaint
+// 2026-11-12: the plan said only the raw word "auto" - nobody could
+// see how many bytes the engine would actually take). The computed
+// number is labeled what it is: an estimate from this instant. The
+// authoritative budget is recomputed at each phase start against the
+// machine's live state; the estimate never shrinks anything silently
+// and never replaces an exact request. When the machine cannot be
+// observed here, the line says the number is unknown instead of
+// inventing one.
+func memoryPlanLines(w io.Writer, memory, lock string, seed uint64, indent string) {
+	m := strings.TrimSpace(memory)
+	if m == "" {
+		fmt.Fprintf(w, "%smemory engine: off (no budget configured)\n", indent)
+		return
+	}
+	if lock == "" {
+		lock = "off"
+	}
+	fmt.Fprintf(w, "%smemory engine: budget %q, lock %q", indent, m, lock)
+	if strings.EqualFold(m, "auto") || strings.EqualFold(m, "max") {
+		fmt.Fprintf(w, ", seed %d", seed)
+	}
+	fmt.Fprintln(w)
+	req, err := memtest.ParseRequest(m)
+	if err != nil {
+		// The request was validated at preflight; anything malformed
+		// that still got here is a setup defect stated as written,
+		// not smoothed over with a guessed number.
+		fmt.Fprintf(w, "%s  budget estimate: not computed (%v)\n", indent, err)
+		return
+	}
+	if !req.Auto && !req.Max {
+		// A fixed request means the same bytes in every phase -
+		// exactness is the promise, so show it exactly.
+		fmt.Fprintf(w, "%s  budget: exactly %s per phase, honored or refused up front, never quietly shrunk\n",
+			indent, human.Bytes(req.Bytes))
+		return
+	}
+	snap := sysinfo.MemorySnapshotNow()
+	b, err := memtest.ComputeBudget(req, snap, memtest.DefaultTrialParams())
+	if err != nil {
+		fmt.Fprintf(w, "%s  budget estimate: not computed - %v\n", indent, err)
+		fmt.Fprintf(w, "%s  (a phase that starts under this constraint refuses honestly, it does not shrink the request)\n", indent)
+		return
+	}
+	fmt.Fprintf(w, "%s  budget estimate at plan time: %s (%s)\n", indent, human.Bytes(b.Bytes), b.Rule)
+	fmt.Fprintf(w, "%s  (estimate only: recomputed against the live machine at each phase start; grants are handed to children exactly, never re-derived per worker)\n", indent)
+}
+
+// phaseClockSpan returns the window a phase occupies on the planned
+// clock, and whether its length is defined by the clock at all. Scheduled
+// phases (transitions, pair switch) contribute their schedule span; a
+// handoff's rounds are command-driven, so its length is not knowable in
+// advance and it is counted as unscheduled - never folded into a duration.
+// The spans feed only the labeled plan-screen estimate: wall-clock is
+// deliberately not promised (settle, rotation and tool startup add on top).
+func phaseClockSpan(opt plan.Options) (time.Duration, bool) {
+	switch {
+	case plan.SwitchActive(opt):
+		return time.Duration(opt.SwitchRounds) * time.Duration(len(opt.SwitchPairs)) * (opt.SwitchGap + opt.SwitchRun), true
+	case opt.Bursts > 0:
+		return time.Duration(opt.Bursts) * (opt.BurstGap + opt.BurstRun), true
+	case opt.HandoffBlocks > 0:
+		return 0, false
+	default:
+		return opt.Duration, true
+	}
+}
+
 // printScenarioPlan renders the compiled phase list for -dry-run: every
 // generator-expanded phase with the parameters it will actually run
 // with, the machine mapping, the resource plan, the requirements that
@@ -386,6 +457,31 @@ func printScenarioPlan(w io.Writer, cfg config.Config, opts []plan.Options, cycl
 		fmt.Fprintf(w, " x %d cycle(s)", cycles)
 	}
 	fmt.Fprintln(w)
+
+	// Planned clock windows, stated BEFORE the phase dump: on a 31-slot
+	// preset the dump outgrows the screen, and an owner who answered
+	// duration and cycles could previously not see how long the whole
+	// thing planned to take. Estimate, labeled as such, never a promise:
+	// settle/rotation/tool startup add on top, and phases whose length is
+	// not clock-defined are counted separately, never folded in as zero.
+	var total time.Duration
+	unscheduled := 0
+	for _, opt := range opts {
+		if span, clocked := phaseClockSpan(opt); clocked {
+			total += span
+		} else {
+			unscheduled++
+		}
+	}
+	if cycles > 1 {
+		fmt.Fprintf(w, "planned clock windows across %d cycle(s): ~%s for %d planned run(s)\n",
+			cycles, total*time.Duration(cycles), len(opts)*cycles)
+		fmt.Fprint(w, "  (estimate, not wall-clock: actual time may be shorter or longer; ")
+		if unscheduled > 0 {
+			fmt.Fprintf(w, "%d phase(s) per cycle have no clock-defined duration and are excluded from this subtotal; ", unscheduled)
+		}
+		fmt.Fprintln(w, "settle, rotation, pauses and tool startup add on top)")
+	}
 
 	// Machine mapping: what the walk and the pinning will be against.
 	if topology, terr := sysinfo.DiscoverTopology(); terr != nil {
@@ -404,14 +500,8 @@ func printScenarioPlan(w io.Writer, cfg config.Config, opts []plan.Options, cycl
 
 	// Resource plan: one memory budget per phase, computed by the
 	// parent at phase start - never re-derived per worker.
-	if strings.TrimSpace(cfg.Memory) == "" {
-		fmt.Fprintln(w, "memory engine: off (no budget configured)")
-	} else {
-		fmt.Fprintf(w, "memory engine: budget %q, lock %q, seed %d - resolved once per phase, granted exactly to each child\n",
-			strings.TrimSpace(cfg.Memory), orDefault(cfg.MemoryLock, "off"), cfg.RamSeed)
-	}
+	memoryPlanLines(w, cfg.Memory, orDefault(cfg.MemoryLock, "off"), cfg.RamSeed, "")
 
-	var total time.Duration
 	for i, opt := range opts {
 		label := opt.Phase
 		if label == "" {
@@ -464,7 +554,7 @@ func printScenarioPlan(w io.Writer, cfg config.Config, opts []plan.Options, cycl
 				}
 				groups[gi] = fmt.Sprintf("g%d[aggressor %s, observer %s]", gi, ag, ob)
 			}
-			span := time.Duration(opt.SwitchRounds) * time.Duration(len(opt.SwitchPairs)) * (opt.SwitchGap + opt.SwitchRun)
+			span, _ := phaseClockSpan(opt)
 			sched := fmt.Sprintf("%d group(s) x %d round(s) gap=%s run=%s", len(opt.SwitchPairs), opt.SwitchRounds, opt.SwitchGap, opt.SwitchRun)
 			if opt.SwitchOrder != "" {
 				sched += " order=" + opt.SwitchOrder
@@ -483,7 +573,6 @@ func printScenarioPlan(w io.Writer, cfg config.Config, opts []plan.Options, cycl
 			}
 			fmt.Fprintf(w, "  %d) %s: test=%s a=%s b=%s mode=switch(%s; %s; all_or_none; measures switch latency command->last-started per turn as an upper bound incl IPC) span≈%s\n",
 				i+1, label, opt.TestName, a, b, strings.Join(groups, " "), sched, span)
-			total += span
 			continue
 		}
 		criterion := fmt.Sprintf("duration=%s", opt.Duration)
@@ -494,7 +583,7 @@ func printScenarioPlan(w io.Writer, cfg config.Config, opts []plan.Options, cycl
 			// The prepared schedule, not a duration, defines this phase:
 			// show exactly what will be commanded (the journal will carry
 			// the concrete windows).
-			span := time.Duration(opt.Bursts) * (opt.BurstGap + opt.BurstRun)
+			span, _ := phaseClockSpan(opt)
 			sched := fmt.Sprintf("%d bursts gap=%s run=%s", opt.Bursts, opt.BurstGap, opt.BurstRun)
 			if opt.BurstJitter > 0 {
 				sched += fmt.Sprintf(" jitter=±%s seed=%d", opt.BurstJitter, opt.BurstSeed)
@@ -507,14 +596,16 @@ func printScenarioPlan(w io.Writer, cfg config.Config, opts []plan.Options, cycl
 			}
 			fmt.Fprintf(w, "  %d) %s: test=%s a=%s b=%s cores=%s mode=transitions(%s) span≈%s\n",
 				i+1, label, opt.TestName, a, b, cores, sched, span)
-			total += span
 			continue
 		}
 		fmt.Fprintf(w, "  %d) %s: test=%s a=%s b=%s cores=%s workers=%d %s mode=%s\n",
 			i+1, label, opt.TestName, a, b, cores, opt.Workers, criterion, mode)
-		total += opt.Duration
 	}
-	fmt.Fprintf(w, "configured load time: %s per cycle (settle/rotation/tool startup add on top)\n", total)
+	fmt.Fprintf(w, "configured load time: %s per cycle (settle/rotation/tool startup add on top)", total)
+	if unscheduled > 0 {
+		fmt.Fprintf(w, "; %d phase(s) with no clock-defined duration excluded from this subtotal", unscheduled)
+	}
+	fmt.Fprintln(w)
 
 	// Requirements the machine or config cannot meet: said now, in the
 	// dry-run, because execution would refuse them (exit 2) - a plan
@@ -669,7 +760,13 @@ func runCycles(opts []plan.Options, cycles int, seed int64, out io.Writer, execu
 	var all []plan.Result
 	for c := 1; c <= cycles; c++ {
 		if cycles > 1 {
-			fmt.Fprintf(out, "\n=== cycle %d/%d ===\n", c, cycles)
+			// The global slot line: per-cycle "phase N/M" headers add up
+			// across cycles here, so a stopped long preset can name the
+			// overall position, not just the position inside a cycle
+			// (the owner's ESC at slot 21 of 93 read as "stopped after
+			// phase 21" of an unstated whole).
+			fmt.Fprintf(out, "\n=== cycle %d/%d === runs %d-%d of %d planned\n",
+				c, cycles, (c-1)*len(opts)+1, c*len(opts), cycles*len(opts))
 		}
 		seq := opts
 		if rng != nil {
@@ -684,6 +781,14 @@ func runCycles(opts []plan.Options, cycles int, seed int64, out io.Writer, execu
 			}
 		}
 		writeScenarioSummary(out, seq, results, ran, stopped, stopMsg, faulted)
+		if cycles > 1 {
+			// Where the whole multi-cycle attempt stands, after every
+			// cycle and after a stop: started counts runs that began
+			// (including one the operator cancelled), never "finished
+			// clean" - the per-phase verdicts above say that part.
+			fmt.Fprintf(out, "scenario: cycle %d/%d — %d of %d planned run(s) started so far\n",
+				c, cycles, (c-1)*len(opts)+countRan(ran), cycles*len(opts))
+		}
 		exit = cycleExit(results, stopped, faulted)
 		if stopped >= 0 {
 			break

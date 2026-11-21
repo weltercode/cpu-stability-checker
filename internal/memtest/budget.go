@@ -62,12 +62,23 @@ func ParseSize(s string) (uint64, error) {
 	return v * unit, nil
 }
 
-// ParseRequest parses a memory request: "auto" or an exact size.
-// A fixed request is never silently reduced later.
+// ParseRequest parses a memory request: "auto", "max", or an exact
+// size. A fixed request is never silently reduced later.
+//
+// "max" (R28, owner complaint 2026-11-12: "тесты не используют всю
+// доступную память") keeps every safety floor of the auto rule but
+// drops only the percentage cap: it means "as much as the machine can
+// honestly hand over", not "everything" - the OS reserve, the commit
+// reserve and the per-worker allowance still bind, and the allocator's
+// honest failure still decides at allocation time. What it resolves to
+// is stated in bytes on every plan screen, so no one has to guess.
 func ParseRequest(s string) (Request, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || strings.EqualFold(s, "auto") {
 		return Request{Auto: true}, nil
+	}
+	if strings.EqualFold(s, "max") {
+		return Request{Max: true}, nil
 	}
 	n, err := ParseSize(s)
 	if err != nil {
@@ -81,10 +92,11 @@ func ParseRequest(s string) (Request, error) {
 
 // --- budget ------------------------------------------------------------------
 
-// Request is what the user/plan asked for: auto, or an exact byte
+// Request is what the user/plan asked for: auto, max, or an exact byte
 // count that must be honored or refused, never quietly shrunk.
 type Request struct {
 	Auto  bool
+	Max   bool
 	Bytes uint64
 }
 
@@ -132,9 +144,11 @@ type Budget struct {
 // ComputeBudget applies the plan's rule with checked arithmetic:
 //
 //	R  = max(MinOSReserve, ceil(TotalPhys/10))
-//	B  = min(floor(AvailPhys*MaxPct/100), AvailPhys-R, AvailPageFile-CommitReserve)
+//	auto: B = min(floor(AvailPhys*MaxPct/100), AvailPhys-R, AvailPageFile-CommitReserve)
+//	max:  B = min(AvailPhys-R, AvailPageFile-CommitReserve)
 //
-// A missing observation forbids auto (the rule cannot be applied to
+// ("max" drops only the percentage cap; every floor stays). A missing
+// observation forbids auto and max (the rule cannot be applied to
 // numbers nobody measured); a subtraction that would go negative is
 // an error naming the constraint, never a silent zero. A fixed
 // request is honored exactly or refused with the constraint that
@@ -144,7 +158,7 @@ func ComputeBudget(req Request, snap sysinfo.MemorySnapshot, p TrialParams) (Bud
 	if p.MaxPct == 0 || p.MaxPct > 100 {
 		return Budget{}, fmt.Errorf("memtest: MaxPct must be 1..100, got %d", p.MaxPct)
 	}
-	if req.Auto {
+	if req.Auto || req.Max {
 		if !snap.Known {
 			return Budget{}, fmt.Errorf("memtest: auto budget refused: physical memory is not observed on this platform")
 		}
@@ -155,7 +169,6 @@ func ComputeBudget(req Request, snap sysinfo.MemorySnapshot, p TrialParams) (Bud
 		if p.MinOSReserve > reserve {
 			reserve = p.MinOSReserve
 		}
-		capFrac := mulDiv(snap.AvailPhys, p.MaxPct, 100)
 		capPhys, okPhys := subChecked(snap.AvailPhys, reserve)
 		capCommit, okCommit := subChecked(snap.AvailPageFile, p.CommitReserve)
 		if !okPhys {
@@ -166,21 +179,36 @@ func ComputeBudget(req Request, snap sysinfo.MemorySnapshot, p TrialParams) (Bud
 			return Budget{}, fmt.Errorf("memtest: auto budget refused: free commit %s is below the commit reserve %s",
 				exactBytes(snap.AvailPageFile), exactBytes(p.CommitReserve))
 		}
-		b, which := capFrac, "70%%-of-available-physical"
-		if p.MaxPct != 70 {
+		// "max" (R28) takes the same min() over the same floors but
+		// omits the percentage cap - removing the cap is the ONLY
+		// thing it changes, and the rule string still names the
+		// constraint that actually binds (the first min() operand
+		// that reaches the chosen value).
+		var bv uint64
+		which := "available-physical-minus-OS-reserve"
+		if req.Auto {
+			capFrac := mulDiv(snap.AvailPhys, p.MaxPct, 100)
 			which = fmt.Sprintf("%d%%-of-available-physical", p.MaxPct)
+			bv = capFrac
+		} else {
+			bv = capPhys
 		}
-		if capPhys < b {
-			b, which = capPhys, "available-physical-minus-OS-reserve"
+		if capPhys < bv {
+			bv, which = capPhys, "available-physical-minus-OS-reserve"
 		}
-		if capCommit < b {
-			b, which = capCommit, "free-commit-minus-commit-reserve"
+		if capCommit < bv {
+			bv, which = capCommit, "free-commit-minus-commit-reserve"
 		}
-		if b == 0 {
+		if bv == 0 {
 			return Budget{}, fmt.Errorf("memtest: auto budget is zero (%s bound it at zero)", which)
 		}
-		return Budget{Bytes: b, Rule: fmt.Sprintf("auto: min(%s=%s, availPhys-reserve=%s, commitFree-reserve=%s)",
-			which, exactBytes(capFrac), exactBytes(capPhys), exactBytes(capCommit))}, nil
+		if req.Auto {
+			capFrac := mulDiv(snap.AvailPhys, p.MaxPct, 100)
+			return Budget{Bytes: bv, Rule: fmt.Sprintf("auto: binding=%s; min(%d%%-of-available=%s, availPhys-reserve=%s, commitFree-reserve=%s)",
+				which, p.MaxPct, exactBytes(capFrac), exactBytes(capPhys), exactBytes(capCommit))}, nil
+		}
+		return Budget{Bytes: bv, Rule: fmt.Sprintf("max: binding=%s; min(availPhys-reserve=%s, commitFree-reserve=%s)",
+			which, exactBytes(capPhys), exactBytes(capCommit))}, nil
 	}
 
 	// Fixed: exact or error, never reduced.

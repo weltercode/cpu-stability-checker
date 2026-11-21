@@ -399,6 +399,15 @@ func executeSession(opt plan.Options, sched transition.Schedule, stagger time.Du
 		in.Reason = msg
 	}
 	res := plan.Finalize(in)
+	// R34: the live mem fold for session runs - the same journal
+	// records the recovered report below reads, the same single rule
+	// the one-shot path uses (plan.FoldRAM). Slots whose workers never
+	// journaled accounting stay unknown; an engine-less session gains
+	// no block at all (absence = unknown). The fold cannot move the
+	// verdict: exit and validation are already final here, and
+	// run_end below carries exactly what Finalize decided.
+	res.Coverage.Mem = foldRunRAM(jpath, runID, len(cores))
+	memLine := res.Coverage.Mem.RAMString() // "" when nobody reported
 	// Q04 verdict gate - the required promise, enforced: no full
 	// verification claim without observed parking evidence on every
 	// core. The exit code is untouched (a clean but unevidenced run
@@ -442,7 +451,7 @@ func executeSession(opt plan.Options, sched transition.Schedule, stagger time.Du
 	// reader still sees the prepared schedule, the parent's
 	// transition observations and the worker's burst records as
 	// separate evidence, exactly as written.
-	writeSessionReport(info, jpath, cores, outcomes, parkLine)
+	writeSessionReport(info, jpath, cores, outcomes, parkLine, memLine)
 	return exit, res, cores
 }
 
@@ -473,12 +482,18 @@ func writeTransitionHeader(w io.Writer, memPlan *memPlanSpec, nCores int, sched 
 // whole block instead of once per line. The parking line (empty = no
 // observation ran) rides the summary half: the observation story
 // belongs to the summary of what happened, and the per-core detail
-// belongs to the journal records.
-func writeSessionReport(w io.Writer, jpath string, cores []int, outcomes []SessionOutcome, parkLine string) {
+// belongs to the journal records. The mem line (empty = no slot
+// reported accounting) is the R34 live fold: the same facts the
+// journal half below shows, stated once where the run's outcome is
+// stated, exactly like the one-shot verdict line does.
+func writeSessionReport(w io.Writer, jpath string, cores []int, outcomes []SessionOutcome, parkLine, memLine string) {
 	var report strings.Builder
 	printSessionSummary(&report, cores, outcomes)
 	if parkLine != "" {
 		fmt.Fprintf(&report, "%s\n", parkLine)
+	}
+	if memLine != "" {
+		fmt.Fprintf(&report, "%s\n", memLine)
 	}
 	recs, iss := journal.ReadAll(jpath)
 	if iss.ReadErr != "" {

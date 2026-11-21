@@ -27,8 +27,3 @@ gate-*.log
 # machine's external-tool paths, and it is deliberately not versioned:
 # a checked-in config would be someone else's machine.
 config.json
-
-# Per-machine configuration. `config init` writes it, it carries this
-# machine's external-tool paths, and it is deliberately not versioned:
-# a checked-in config would be someone else's machine.
-config.json

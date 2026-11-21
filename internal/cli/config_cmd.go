@@ -244,6 +244,10 @@ func showMemoryLine(w *cfgPrinter, cfg config.Config) {
 		w.line("memory engine", "auto: the budget is computed at run admission from this machine's free memory - deliberately NOT computed here (a config view must not pretend to know the machine moment the run will see)")
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Memory), "max") {
+		w.line("memory engine", "max: like auto but without the share cap - still bounded by the OS reserve, the commit reserve and live admission, computed at run admission; the plan screen shows the computed bytes and which constraint binds")
+		return
+	}
 	req, err := cfg.MemoryRequest()
 	if err != nil {
 		w.line("memory engine", fmt.Sprintf("%q as written is NOT a valid budget: every run attempt refuses up front (exit 2): %v - the value stays shown as written, nothing is guessed around it", cfg.Memory, err))

@@ -171,9 +171,43 @@ func historyCmd(args []string) int {
 	fs := flag.NewFlagSet("history", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "structured answer on stdout")
 	limit := fs.Int("limit", 0, "show at most this many sessions (0 = all)")
+	clear := fs.Bool("clear", false, "remove ALL history records and their evidence files (needs -yes)")
+	yes := fs.Bool("yes", false, "confirm -clear (the operator's named decision, given twice on purpose)")
 	fs.Parse(args)
 	if refusePositionals(fs, "history") {
 		return 2
+	}
+	// R37: the clear route is a deliberately two-word decision, and
+	// it never silently combines with the read views.
+	if *clear && *asJSON {
+		fmt.Fprintln(os.Stderr, "history: -clear and -json do not combine: the clear preview and summary are human decision screens")
+		return 2
+	}
+	if *yes && !*clear {
+		fmt.Fprintln(os.Stderr, "history: -yes only confirms -clear; nothing was done")
+		return 2
+	}
+	if *clear && *limit != 0 {
+		fmt.Fprintln(os.Stderr, "history: -clear removes ALL records; -limit belongs to the listing, not the clear")
+		return 2
+	}
+	if *clear {
+		plan := clearHistory(true) // preview: decide-only, never deletes
+		if !*yes {
+			for _, l := range clearPreview(plan) {
+				fmt.Println(l)
+			}
+			fmt.Println("refused: nothing was removed - re-run with -clear -yes to confirm")
+			return 2
+		}
+		res := clearHistory(false)
+		for _, l := range clearSummary(res) {
+			fmt.Println(l)
+		}
+		if len(res.failed) > 0 {
+			return 1 // a partial clear stays visible and retryable
+		}
+		return 0
 	}
 	if *limit < 0 {
 		fmt.Fprintln(os.Stderr, "history -limit cannot be negative")

@@ -1,5 +1,11 @@
 package plan
 
+import (
+	"fmt"
+
+	"github.com/weltercode/cpu-stability-checker/internal/human"
+)
+
 // Result is the structured outcome of one run, returned by both executors:
 // runner.ExecuteWithResult (threads in one process) and
 // subprocess.ExecuteSubprocessWithResult (one pinned child per CPU).
@@ -225,6 +231,79 @@ type Coverage struct {
 	Completed   int
 	Verified    uint64
 	ChecksKnown bool
+	// Mem is the memory engine's run-level accounting, present only
+	// when at least one slot reported a mem_done record in this run.
+	// Absence means no engine accounting was observed - unknown,
+	// never zero. The numbers are CUMULATIVE engine byte accounting
+	// over the slots that reported: a slot without a mem_done record
+	// counts as unknown, not as zero, and none of this is a claim
+	// about unique physical-RAM coverage.
+	Mem *RAMTotals `json:"mem,omitempty"`
+}
+
+// RAMTotals folds the per-slot mem_done accounting of one run into
+// run-level facts. It never claims more than the records support:
+// EngineSlots counts slots whose accounting was observed,
+// UnknownSlots counts slots whose accounting was never written
+// (absence = unknown, never zero).
+type RAMTotals struct {
+	// EngineSlots counts slots that reported a mem_done record.
+	EngineSlots int `json:"engine_slots"`
+	// UnknownSlots counts planned slots whose memory accounting was
+	// never reported (no engine, a killed child, or an older journal).
+	UnknownSlots int `json:"unknown_slots"`
+	// Requested is the sum of grant bytes the parent assigned to the
+	// accounting slots.
+	Requested uint64 `json:"requested_bytes"`
+	// Allocated is what the OS actually committed for those slots
+	// (differs from Requested exactly when a region was rounded).
+	Allocated uint64 `json:"allocated_bytes"`
+	// Touched is the first-touch coverage before the measured window;
+	// an interrupted pass reports the honest partial.
+	Touched uint64 `json:"touched_bytes"`
+	// Verified is CUMULATIVE verified byte-work (a byte verified in
+	// each of five passes counts five times). It is work performed,
+	// not a physical region count.
+	Verified uint64 `json:"verified_bytes_cumulative"`
+	// LastPass sums the per-slot unique-in-last-pass volumes where
+	// the slot proved them. Slots without proof are unknown and are
+	// not counted here, so this is a floor, not a coverage promise.
+	LastPass uint64 `json:"last_pass_verified_bytes"`
+}
+
+// MemAccounting is one slot's memory-engine facts as the executor
+// reports them at run end (translated from the engine's own mem_done
+// record by the executor; the plan layer never invents them). Every
+// field is what the OS and the workload actually did. VerifiedUnique
+// and VerifiedTotal are nil when the slot never proved a last-pass
+// volume: unknown, never zero.
+type MemAccounting struct {
+	Requested      uint64  `json:"requested"`
+	Allocated      uint64  `json:"allocated"`
+	Touched        uint64  `json:"touched"`
+	Verified       uint64  `json:"verified"`
+	VerifiedUnique *uint64 `json:"verified_unique,omitempty"` // nil = the slot never proved a unique last-pass volume
+	VerifiedTotal  *uint64 `json:"verified_total,omitempty"`  // nil = same unknown, in pair with VerifiedUnique
+}
+
+// RAMString renders the run-level accounting as one honest line for
+// the run summary. The wording carries the meaning: CUMULATIVE
+// verified byte-work, last-pass bytes only where slots proved them,
+// and unknown slots stated - never a physical-RAM coverage claim.
+func (m *RAMTotals) RAMString() string {
+	if m == nil {
+		return ""
+	}
+	s := fmt.Sprintf("memory coverage (cumulative): %d slot(s) accounted, requested=%s allocated=%s touched=%s verified=%s",
+		m.EngineSlots, human.Bytes(m.Requested), human.Bytes(m.Allocated),
+		human.Bytes(m.Touched), human.Bytes(m.Verified))
+	if m.LastPass > 0 {
+		s += fmt.Sprintf(" last-pass=%s", human.Bytes(m.LastPass))
+	}
+	if m.UnknownSlots > 0 {
+		s += fmt.Sprintf(" - %d slot(s) without accounting (unknown, not zero)", m.UnknownSlots)
+	}
+	return s
 }
 
 // IntPtr is a small helper for Attribution.Index.

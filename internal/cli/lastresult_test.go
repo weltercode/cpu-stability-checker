@@ -104,6 +104,58 @@ func TestReceiptAggregation(t *testing.T) {
 	}
 }
 
+// R29: the receipt is the durable answer to "how much RAM did that
+// attempt actually exercise?" - the children's own mem_done facts,
+// folded over the attempt's runs. When no run reported, the block
+// must stay ABSENT (unknown), never a zeros-filled story; when they
+// did, the sums ride into the JSON on disk, not just the in-memory
+// view.
+func TestReceiptMemoryFold(t *testing.T) {
+	withMem := plan.Result{Execution: plan.ExecCompleted, Validation: plan.ValVerified,
+		Coverage: plan.Coverage{Mem: &plan.RAMTotals{EngineSlots: 2, Requested: 1 << 30, Allocated: 1 << 30, Touched: 1 << 30, Verified: 7 << 30, LastPass: 1 << 30}}}
+	path := useScratchReceipt(t)
+	tr := newAttemptReceipt("recipe-m", 2, nil, nil)
+	tr.finish(0, []plan.Result{withMem, withMem})
+	r, err := loadLastResult()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Mem == nil {
+		t.Fatal("runs that reported accounting produced a receipt with no mem block")
+	}
+	if r.Mem.EngineSlots != 4 || r.Mem.Requested != 2<<30 || r.Mem.Verified != 14<<30 {
+		t.Errorf("receipt mem fold = %+v, want 4 slots / 2GiB requested / 14GiB verified", r.Mem)
+	}
+	// And the block really survived into the JSON file on disk.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"mem"`) || !strings.Contains(string(raw), `"engine_slots"`) {
+		t.Errorf("on-disk receipt lost the mem block:\n%s", raw)
+	}
+
+	// A CPU-only attempt: no run reported - the block must be absent,
+	// not zero.
+	path2 := useScratchReceipt(t)
+	tr2 := newAttemptReceipt("recipe-c", 1, nil, nil)
+	tr2.finish(0, []plan.Result{{Execution: plan.ExecCompleted, Validation: plan.ValVerified}})
+	r2, err := loadLastResult()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Mem != nil {
+		t.Errorf("unaccounted attempt grew a mem block: %+v (absence means not observed)", r2.Mem)
+	}
+	raw2, err := os.ReadFile(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw2), `"mem"`) {
+		t.Errorf("on-disk receipt invented a mem block for an unaccounted attempt:\n%s", raw2)
+	}
+}
+
 // The pending state is written the moment the attempt is armed: a
 // crash from here on leaves a truthful "started, never finalized".
 func TestReceiptPendingThenFinal(t *testing.T) {

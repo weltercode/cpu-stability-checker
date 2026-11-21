@@ -5,11 +5,29 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/weltercode/cpu-stability-checker/internal/config"
 )
+
+// R40 (owner: "What the heck is P07"): preset descriptions are read
+// verbatim on plan screens and tools listings - no development queue
+// ID may stand in them either. This pre-R40 corpus DID carry
+// "the full P07 set so far"; the guard exists so it never comes back.
+func TestPresetDescriptionsNoInternalIDs(t *testing.T) {
+	pat := regexp.MustCompile(`\b[PAQRC]\d{1,3}[a-z]?\b`)
+	for _, p := range presets {
+		if m := pat.FindString(p.Description); m != "" {
+			t.Errorf("preset %s description carries development ID %q: %q", p.Name, m, p.Description)
+		}
+	}
+	// The card text itself is guarded in the catalog package
+	// (TestNoInternalIDsInDisplayText); here the preset wording -
+	// this package's own user-facing copy - is what stands on its
+	// own plan screens.
+}
 
 // Every built-in preset must compile through the SAME pipeline a
 // hand-written phases list uses, on the live machine: the preset is a
@@ -140,7 +158,7 @@ func TestPresetLookup(t *testing.T) {
 			t.Fatalf("presetNames not sorted: %v", names)
 		}
 	}
-	for _, want := range []string{"cpu-baseline", "ram-baseline", "ram-quick", "ram-standard", "ram-extended", "core-cycle", "transitions", "mixed-validation"} {
+	for _, want := range []string{"cpu-baseline", "ram-baseline", "ram-quick", "ram-standard", "ram-extended", "ram-sustained", "ram-extreme-rough", "core-cycle", "transitions", "mixed-validation"} {
 		if _, ok := lookupPreset(want); !ok {
 			t.Errorf("preset %q missing", want)
 		}

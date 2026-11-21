@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -116,15 +117,15 @@ func TestMenuRunOutcomeStatesTheStay(t *testing.T) {
 
 // A setup error (bad config for the scenario) still ends the session
 // with that code - the stay-in-menu policy must not swallow real
-// failures. The scenario run lives under Settings now (task menu
-// C5): "6" opens settings, "1" runs the config.json scenario.
+// failures. The scenario run lives under Advanced tools (task menu
+// C5, R39 item 8): "8" opens it, "1" runs the config.json scenario.
 func TestMenuLoopPropagatesSetupError(t *testing.T) {
 	dir := chdirTemp(t)
 	os.WriteFile("config.json", []byte(`{"test": "general"}`), 0o644) // no phases: setup error
 	_ = dir
 	done := make(chan int, 1)
 	go func() {
-		done <- menuLoop(bufio.NewReader(strings.NewReader("6\n1\n")), config.Default())
+		done <- menuLoop(bufio.NewReader(strings.NewReader("8\n1\n")), config.Default())
 	}()
 	select {
 	case code := <-done:
@@ -136,15 +137,47 @@ func TestMenuLoopPropagatesSetupError(t *testing.T) {
 	}
 }
 
-// The "Detailed description" submenu must be MORE detailed than the
-// clipped list rows in front of it, never less. The owner caught the
-// old shape reading backwards: the main screen already carried the
-// summary (clipped) while the "detailed" screen showed bare titles
-// ("на первом экране я вижу более подробное описание, чем в
-// 'детальном'"). So the submenu rows carry the full summary wrapped
-// over continuation lines, and a pick adds the long Details text and,
-// for an unavailable goal, its recorded Reason right here.
-func TestDetailedSubmenuCarriesMoreThanTheList(t *testing.T) {
+// R39b: the About screen sits at 7 of Advanced tools and carries the
+// fixed honesty sections verbatim. Reading it only prints: it starts
+// no run, writes no record, and the vocabulary dictionary names the
+// unknown instead of smoothing it over.
+func TestAboutScreenFixedSections(t *testing.T) {
+	chdirTemp(t)
+	out := captureStdoutAndRun(t, func() {
+		if code := menuLoop(bufio.NewReader(strings.NewReader("8\n7\nq\n0\n")), config.Default()); code != 0 {
+			t.Errorf("menu exit = %d, want 0", code)
+		}
+	})
+	for _, want := range []string{
+		"--- About this tool ---",
+		"The result words, always exactly these:",
+		"PASS       - every check the run performed matched its exact",
+		"UNKNOWN    - the records cannot say: missing, unreadable or",
+		"What PASS never means: PASS is bounded",
+		"claim that the machine is stable",
+		"the tool states them instead of counting them as clean",
+		"word, or history_keep) removes session records TOGETHER WITH",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("About screen lost %q:\n%s", want, out)
+		}
+	}
+	for _, gone := range []string{lastrunPath, lastResultPath, findingsPath} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("reading About created %s", gone)
+		}
+	}
+}
+
+// R40 (owner-named): the card's own screen must carry MORE than the
+// short list row in front of it, never less, and it must be the ONLY
+// description level - the separate "Detailed description" submenu is
+// gone. The owner caught the old shape reading backwards twice (the
+// "detailed" screen shorter than the list rows: "right now is shorter
+// than menu items"), so the property itself is what this pins: list
+// row (title + Short) ⊂ card screen (full summary, facet block,
+// planned cost, full contract, landmark).
+func TestCardScreenCarriesMoreThanTheList(t *testing.T) {
 	chdirTemp(t)
 	ui := &screenUI{} // append mode: width falls back to 80
 	cards := categoryCards(catalog.MIX, catalog.Normal)
@@ -152,90 +185,119 @@ func TestDetailedSubmenuCarriesMoreThanTheList(t *testing.T) {
 		t.Fatalf("MIX normal cards = %d, want the three catalog entries", len(cards))
 	}
 
-	// The parent list clips the long summary - that is the showcase
-	// this submenu must beat.
-	clipped := cardLine(1, cards[0].Title, cards[0].Summary, false, 80)
-	if !strings.Contains(clipped, "…") {
-		t.Fatalf("premise broken: the 80-col list row is not clipped: %q", clipped)
+	// Premise: the list row is the SHORT form - it carries neither
+	// the full summary nor the cost line (the owner's complaint was
+	// exactly this content standing in the list).
+	list := strings.Join(cardLines(1, cards[0], 80), "\n")
+	if strings.Contains(list, cards[0].Summary) {
+		t.Fatalf("premise broken: the list row carries the full summary: %q", list)
+	}
+	if strings.Contains(list, "planned at your settings") || strings.Contains(list, "your settings") {
+		t.Fatalf("premise broken: the list row carries a cost line again: %q", list)
 	}
 
-	// "1" opens the available card, Enter returns to the submenu,
-	// "2" opens an unavailable card, Enter, then "q" backs out.
-	in := bufio.NewReader(strings.NewReader("1\n\n2\n\nq\n"))
+	// The available card: Enter on its screen is consent (true).
+	in := bufio.NewReader(strings.NewReader("\n"))
 	var out string
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		out = captureStdout(t, func() { detailsSubmenu(in, ui, cards) })
+		out = captureStdout(t, func() {
+			if !cardScreen(in, ui, cards[0]) {
+				t.Error("Enter on an available card did not continue into the run flow")
+			}
+		})
 	}()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("detailsSubmenu did not return")
+		t.Fatal("cardScreen did not return")
 	}
-
-	if !strings.Contains(out, "--- Detailed description ---") {
-		t.Errorf("submenu header missing:\n%s", out)
+	if !strings.Contains(out, "--- "+cards[0].Title+" ---") {
+		t.Errorf("card screen header missing:\n%s", out)
 	}
-	// The list stage of the submenu carries the FULL summary of the
-	// available card: rejoin its wrapped continuation lines and
-	// compare with the catalog data, word for word. The parent's
-	// row above provably clipped that same summary.
-	firstPick := strings.Index(out, cards[0].Details)
-	if firstPick < 0 {
-		t.Fatalf("the available card's long Details text is missing:\n%s", out)
-	}
-	listStage := out[:firstPick]
-	lines := strings.Split(listStage, "\n")
+	// The FULL summary is here (wrapped, never clipped): rejoin.
+	lines := strings.Split(out, "\n")
 	block := []string{}
-	for i, l := range lines {
-		if strings.HasPrefix(l, "  1) ") {
-			for _, w := range lines[i+1:] {
-				if strings.HasPrefix(w, "  2) ") {
-					break
-				}
-				block = append(block, strings.TrimSpace(w))
-			}
+	for _, l := range lines {
+		if strings.HasPrefix(l, "     ") {
+			block = append(block, strings.TrimSpace(l))
+		} else if len(block) > 0 {
 			break
 		}
 	}
 	if strings.Join(block, " ") != cards[0].Summary {
-		t.Errorf("submenu row 1 does not carry the full summary:\n got %q\nwant %q", strings.Join(block, " "), cards[0].Summary)
+		t.Errorf("card screen does not carry the full summary:\n got %q\nwant %q", strings.Join(block, " "), cards[0].Summary)
 	}
-	if strings.Contains(listStage, "…") {
-		t.Errorf("submenu list rows clip a summary the way the parent does:\n%s", listStage)
+	// The facet block keeps the accepted labels.
+	f, ok := catalog.FacetsFor(cards[0].ID)
+	if !ok {
+		t.Fatal("the available MIX card has no facet record")
 	}
-	if !strings.Contains(out, "Simultaneous CPU + RAM load (unavailable)") {
-		t.Error("unavailable mark lost from the submenu rows")
+	if !strings.Contains(out, "PASS means / limits: "+f.Limits) {
+		t.Errorf("the facet block was not shown for the available card:\n%s", out)
 	}
-	// The unavailable goal states its recorded reason inside the
-	// submenu itself (the red "Not available:" behind pick 2).
-	if !strings.Contains(out, "Not available: co-execution is not implemented yet") {
-		t.Error("the unavailable card's recorded Reason was not stated in the submenu")
-	}
-	// The available card's full contract is present too.
+	// The long contract and the planned-cost line live here.
 	if !strings.Contains(out, "will not promise one") {
 		t.Error("the long Details text was not shown for the available card")
 	}
+	if !strings.Contains(out, "Planned cost: durations and budgets come from your settings") {
+		t.Errorf("the cost line is missing from the card screen:\n%s", out)
+	}
+	// And the machine landmark, in its honest absence.
+	if !strings.Contains(out, "last attempt here: no observation on record") {
+		t.Errorf("the landmark line is missing from the card screen:\n%s", out)
+	}
+
+	// Enter on an UNAVAILABLE card is back, never consent: the
+	// recorded Reason stands and nothing continues.
+	in = bufio.NewReader(strings.NewReader("\n"))
+	out = captureStdout(t, func() {
+		if cardScreen(in, ui, cards[1]) {
+			t.Error("Enter on an unavailable card continued - consent from a refusal")
+		}
+	})
+	if !strings.Contains(out, "Not available: co-execution is not implemented yet") {
+		t.Errorf("the unavailable card did not state its Reason:\n%s", out)
+	}
+	if !strings.Contains(out, "(unavailable)") && !strings.Contains(out, "not available") {
+		t.Error("no text mark on the refusal screen")
+	}
+
+	// Any other input is back too.
+	in = bufio.NewReader(strings.NewReader("x\n"))
+	if cardScreen(in, ui, cards[0]) {
+		t.Error("'x' on a card screen was treated as consent")
+	}
+	// EOF is back, never consent.
+	in = bufio.NewReader(strings.NewReader(""))
+	if cardScreen(in, ui, cards[0]) {
+		t.Error("EOF on a card screen was treated as consent")
+	}
 }
 
-// The parent menus call this choice "Detailed description", matching
-// what it now actually shows; no menu may still offer a bare "Details"
-// row that promises less than the screen above it.
-func TestCategoryMenuOffersDetailedDescriptionChoice(t *testing.T) {
+// R40: no separate "Detailed description" item exists in a category
+// menu - the cards and the manual choice are the whole list, and the
+// range hint matches that (the old bug class: hints excluding valid
+// choices).
+func TestCategoryMenuNoSeparateDetailsItem(t *testing.T) {
 	chdirTemp(t)
 	worst := 0
 	out := captureStdout(t, func() {
-		if code := categoryMenu(bufio.NewReader(strings.NewReader("q\n")), &screenUI{},
+		if code := categoryMenu(bufio.NewReader(strings.NewReader("99\nq\n")), &screenUI{},
 			config.Default(), sysinfo.Topology{}, catalog.MIX, "Mixed CPU + RAM tests", &worst); code != 0 {
 			t.Errorf("categoryMenu(back) = %d, want 0", code)
 		}
 	})
-	if !strings.Contains(out, "Detailed description") {
-		t.Errorf("menu lost the Detailed description choice:\n%s", out)
+	for _, gone := range []string{"Detailed description", ") Details"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("category menu still offers %q:\n%s", gone, out)
+		}
 	}
-	if strings.Contains(out, ") Details") {
-		t.Errorf("the old bare Details row is still offered:\n%s", out)
+	cards := categoryCards(catalog.MIX, catalog.Normal)
+	want := "Enter a number from 1 to " + strconv.Itoa(len(cards)+1) + " or q to go back."
+	if !strings.Contains(out, want) {
+		t.Errorf("bad-input hint does not match the real range:\n%s", out)
 	}
 }
 
@@ -259,7 +321,6 @@ func TestMenuNoSecondLevel(t *testing.T) {
 		"General CPU check · floating point",
 		"General CPU check · SHA-256",
 		"Manually pick an algorithm or an external engine",
-		"Detailed description",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("flat CPU menu lost %q:\n%s", want, out)

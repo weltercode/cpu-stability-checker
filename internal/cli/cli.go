@@ -37,6 +37,10 @@ func Run(args []string) int {
 		return catalogCmd(args[1:])
 	case "history":
 		return historyCmd(args[1:])
+	case "compare":
+		return compareCmd(args[1:])
+	case "artifacts":
+		return artifactsCmd(args[1:])
 	case "menu":
 		return runMenu()
 	case "config":
@@ -139,6 +143,31 @@ Usage:
                                  availability and the reason when not
   cpu-stability history [-json] [-limit N]
                                  recorded sessions, newest first
+  cpu-stability history -clear -yes
+                                 remove ALL records AND their logs/
+                                 journals/fragment files: the two-word
+                                 decision (the preview without -yes is a
+                                 named refusal); lastrun/lastresult/
+                                 findings and config.json are never
+                                 touched. Automatic retention between
+                                 runs is config "history_keep": -1 keeps
+                                 everything, default keeps the last 3
+                                 records with their files
+  cpu-stability compare -a <id> -b <id> [-json]
+                                 read-only side-by-side of two recorded
+                                 sessions: what each ACTUALLY covered (core
+                                 sets, largest single run's verified memory
+                                 per audit A11) and how complete each side's
+                                 provenance is (known of total runs per axis)
+                                 - never a comparability PROOF
+  cpu-stability artifacts [-json]
+                                 read-only inventory of the evidence this
+                                 directory accumulated: journal groups with
+                                 their fragment trees and logs, what the
+                                 history/receipt metadata still references,
+                                 singletons and export bundles. It deletes
+                                 nothing and NEVER says a file is safe to
+                                 remove
   cpu-stability topology [-json] physical cores, SMT siblings, CPU Sets
   cpu-stability caps [-json]     which telemetry sources are alive here
   cpu-stability version [-json]  exact build identity (module version, VCS

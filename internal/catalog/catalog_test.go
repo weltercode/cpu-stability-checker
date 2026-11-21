@@ -107,7 +107,10 @@ func TestCatalogIDsAreStable(t *testing.T) {
 		"mem-bandwidth", "mem-quick",
 		"mix-comprehensive", "mix-simultaneous", "mix-transitions-on-ram",
 		"quick-check",
-		"ram-address", "ram-constant", "ram-extended", "ram-moving", "ram-random",
+		// R30 added ram-sustained, R31 added ram-extreme-rough: stated
+		// extensions of the frozen set (new named cards), not silent
+		// drift - each card's text and structure tests pin its promise.
+		"ram-address", "ram-constant", "ram-extended", "ram-extreme-rough", "ram-moving", "ram-random", "ram-sustained",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("catalog ID set changed:\n got %v\nwant %v", got, want)
@@ -181,7 +184,7 @@ func TestCatalogWorkloadsResolve(t *testing.T) {
 // as a real preset profile in P07f).
 func TestCatalogNeedsMemory(t *testing.T) {
 	for _, p := range All() {
-		want := strings.HasPrefix(p.Workload, "ram-") || p.ID == "mix-comprehensive" || p.ID == "ram-extended"
+		want := strings.HasPrefix(p.Workload, "ram-") || p.ID == "mix-comprehensive" || p.ID == "ram-extended" || p.ID == "ram-sustained" || p.ID == "ram-extreme-rough"
 		if p.NeedsMemory != want {
 			t.Errorf("card %s NeedsMemory=%t, want %t", p.ID, p.NeedsMemory, want)
 		}

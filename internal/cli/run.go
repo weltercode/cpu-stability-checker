@@ -81,7 +81,7 @@ func runConfiguredIOWithUI(askForConfirmation bool, in io.Reader, out io.Writer,
 }
 
 func confirmRun(in io.Reader, out io.Writer) bool {
-	fmt.Fprint(out, "Start this run? [y/N]: ")
+	fmt.Fprint(out, tx("Start this run? [y/N]: "))
 	line, _ := bufio.NewReader(in).ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"

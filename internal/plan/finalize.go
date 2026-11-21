@@ -35,6 +35,57 @@ type UnitInput struct {
 	// evidence is never promoted to confirmed, and confirmed only
 	// ever comes from a protocol the adapter parses.
 	Evidence string
+	// Mem is the slot's memory-engine accounting, translated from the
+	// engine's own mem_done record by the executor. nil = the slot
+	// never reported accounting (no engine, a killed child, an older
+	// journal): the run's memory coverage for this slot stays
+	// unknown, and Finalize counts it in UnknownSlots - never zero.
+	Mem *MemAccounting
+}
+
+// unitMem collects the reported memory accounting of the units for
+// FoldRAM; a unit with nil Mem is unreported and counted by the
+// unit count minus the reported one, never folded in as a zero.
+func unitMem(units []UnitInput) []*MemAccounting {
+	observed := make([]*MemAccounting, 0, len(units))
+	for _, u := range units {
+		if u.Mem != nil {
+			observed = append(observed, u.Mem)
+		}
+	}
+	return observed
+}
+
+// FoldRAM folds per-slot memory-engine accounting into run-level
+// facts (R29's rule; R34 makes it the ONLY entry point: the one-shot
+// executor reaches it through Finalize's units, the session-shape
+// executors through a scan of their children's own journal records -
+// nobody rebuilds the arithmetic). observed holds one entry per slot
+// whose accounting was reported; unreportedSlots counts planned slots
+// whose accounting was never observed - absence is unknown, never
+// folded in as a zero. A run where nobody reported returns nil: no
+// block, no zeros; absence of the block means "not observed", not
+// "the engine touched nothing". The sums are cumulative byte-work;
+// LastPass is a floor over the slots that PROVED a pass volume. None
+// of this is a claim about unique physical-RAM coverage.
+func FoldRAM(observed []*MemAccounting, unreportedSlots int) *RAMTotals {
+	if len(observed) == 0 {
+		return nil
+	}
+	if unreportedSlots < 0 {
+		unreportedSlots = 0
+	}
+	mem := &RAMTotals{EngineSlots: len(observed), UnknownSlots: unreportedSlots}
+	for _, u := range observed {
+		mem.Requested += u.Requested
+		mem.Allocated += u.Allocated
+		mem.Touched += u.Touched
+		mem.Verified += u.Verified
+		if u.VerifiedUnique != nil {
+			mem.LastPass += *u.VerifiedUnique
+		}
+	}
+	return mem
 }
 
 // Finalize derives the full Result, including the compatibility view,
@@ -76,6 +127,14 @@ func Finalize(in FinalInput) Result {
 	// Coverage checks are only "known" when every required unit could
 	// report them; one external slot makes the whole count unknown.
 	res.Coverage.ChecksKnown = !unknownEvidence
+
+	// Memory-engine accounting (R29): the fold runs through FoldRAM,
+	// the single rule every executor uses (R34: the session-shape
+	// executors fold the same facts from their journal scan WITHOUT
+	// rebuilding the arithmetic - two formulas would be two chances
+	// to drift).
+	observed := unitMem(in.Units)
+	res.Coverage.Mem = FoldRAM(observed, len(in.Units)-len(observed))
 
 	// Faults: confirmed per-CPU findings only.
 	for _, f := range in.Findings {
@@ -149,6 +208,45 @@ func Finalize(in FinalInput) Result {
 	res.Aborted = in.Execution != ExecCompleted && in.Execution != ExecSkipped
 	res.AbortMsg = in.Reason
 	return res
+}
+
+// CombineRAM folds per-run memory accounting into one attempt-level
+// view (R29: the receipt and the run summary must show the byte
+// totals without anybody re-reading journals). Slots stay separate:
+// each run accounted its own slots, so summing across a phase list
+// sums distinct slot-settles and never double-counts one settle. A
+// run with no accounting at all is not silently zero: once the fold
+// exists at all, that run's PLANNED slots join UnknownSlots - their
+// accounting was not observed, stated as unknown, never as zeros and
+// never carrying invented bytes. Returns nil when NO run reported
+// anything - the block's absence then honestly means "not observed",
+// exactly like a nil Coverage.Mem.
+func CombineRAM(results []Result) *RAMTotals {
+	var out *RAMTotals
+	var unobserved int // planned slots of runs whose accounting was never observed
+	for i := range results {
+		m := results[i].Coverage.Mem
+		if m == nil {
+			unobserved += results[i].Coverage.Planned
+			continue
+		}
+		if out == nil {
+			cp := *m
+			out = &cp
+			continue
+		}
+		out.EngineSlots += m.EngineSlots
+		out.UnknownSlots += m.UnknownSlots
+		out.Requested += m.Requested
+		out.Allocated += m.Allocated
+		out.Touched += m.Touched
+		out.Verified += m.Verified
+		out.LastPass += m.LastPass
+	}
+	if out != nil {
+		out.UnknownSlots += unobserved
+	}
+	return out
 }
 
 // validation applies the honesty rules PER UNIT, never on the aggregate:

@@ -12,6 +12,7 @@ import (
 
 	"github.com/weltercode/cpu-stability-checker/internal/human"
 	"github.com/weltercode/cpu-stability-checker/internal/journal"
+	"github.com/weltercode/cpu-stability-checker/internal/plan"
 )
 
 // reportCmd turns the crash journal into the question a long run actually
@@ -277,7 +278,13 @@ type runDetailJSON struct {
 	// the field (absence is never rendered as a pass or a failure).
 	Validation string                 `json:"validation"`
 	Meta       *journal.RunMetaFields `json:"provenance,omitempty"` // null/absent = unknown
-	Cores      []runCoreCoverageJSON  `json:"cores"`
+	// Mem is this run's folded engine accounting (R29): the sum of
+	// the slots' own mem_done records, kept strictly per-run so the
+	// report's no-cross-run-summing rule holds. Absent = no slot
+	// reported accounting (unknown, not zero). Cumulative byte-work:
+	// never a unique physical-RAM coverage claim.
+	Mem   *plan.RAMTotals       `json:"mem,omitempty"`
+	Cores []runCoreCoverageJSON `json:"cores"`
 }
 
 // runCoreCoverageJSON carries what one core's run actually verified.
@@ -468,7 +475,52 @@ func runDetails(reports []journal.RunReport) []runDetailJSON {
 			}
 			rd.Cores = append(rd.Cores, rc)
 		}
+		// R29: one per-run rollup of the slots' own mem_done records.
+		// Strictly per-run (the envelope's rule: never sum verified
+		// bytes across runs that re-checked the same region), and
+		// slots without accounting count as unknown inside the fold,
+		// never as zeros.
+		rd.Mem = runMemoryTotals(rep)
 		out = append(out, rd)
+	}
+	return out
+}
+
+// runMemoryTotals folds one run's per-slot engine accounting into
+// run-level facts (R29). nil = no slot reported accounting: the
+// coverage stays unknown, never rendered as zero. The sums are
+// CUMULATIVE engine byte-work; last_pass is a floor over the slots
+// that proved their unique last-pass volume. The wording and labels
+// come from the same plan.RAMTotals shape the receipts carry, so the
+// report, the receipt and the summary cannot drift into promising
+// physical-RAM coverage.
+func runMemoryTotals(rep journal.RunReport) *plan.RAMTotals {
+	var out *plan.RAMTotals
+	for _, c := range rep.Cores {
+		if c.Mem == nil {
+			continue // no mem_done for this slot: unknown, counted below
+		}
+		if out == nil {
+			out = &plan.RAMTotals{}
+		}
+		out.EngineSlots++
+		out.Requested += c.Mem.Requested
+		out.Allocated += c.Mem.Allocated
+		out.Touched += c.Mem.Touched
+		out.Verified += c.Mem.Verified
+		if c.Mem.VerifiedUnique != nil {
+			out.LastPass += *c.Mem.VerifiedUnique
+		}
+	}
+	if out == nil {
+		return nil
+	}
+	// Slots the run registered or observed without accounting stay
+	// unknown; count every core record without a mem_done.
+	for _, c := range rep.Cores {
+		if c.Mem == nil {
+			out.UnknownSlots++
+		}
 	}
 	return out
 }
@@ -503,20 +555,37 @@ func reportDiff(pathA string, issA *journal.Issues, reportsA []journal.RunReport
 	// WHEA evidence comparability: the counts only mean something when
 	// both sides actually watched, and uncorrected hardware evidence
 	// differs independently of per-core fault counts.
-	if wa, wb := wheaSummary(reportsA), wheaSummary(reportsB); wa != nil && wb != nil {
-		if wa.Observation != "available" || wb.Observation != "available" {
-			fmt.Printf("warning: WHEA observation not available on both sides (%s vs %s): hardware-error counts are not comparable\n",
-				wa.Observation, wb.Observation)
-		}
-		if wa.Uncorrected != wb.Uncorrected {
-			fmt.Printf("warning: uncorrected WHEA records differ (%d vs %d): hardware evidence differs independently of core faults\n",
-				wa.Uncorrected, wb.Uncorrected)
-		}
+	for _, w := range wheaNotices(reportsA, reportsB) {
+		fmt.Println("warning: " + w)
 	}
 	for _, w := range comparabilityWarnings(reportsA, reportsB) {
 		fmt.Println("warning: " + w)
 	}
 	return 0
+}
+
+// wheaNotices states the WHEA comparability facts between two run
+// sets: nothing is said when either side has no WHEA view at all
+// (nil - unknown, not empty), the observation state must hold on
+// both sides for the counts to mean anything, and uncorrected
+// evidence differs independently of per-core faults. The strings
+// carry no "warning: " prefix; each renderer adds it once (the
+// journal diff and the session compare share this one model).
+func wheaNotices(a, b []journal.RunReport) []string {
+	wa, wb := wheaSummary(a), wheaSummary(b)
+	if wa == nil || wb == nil {
+		return nil
+	}
+	var warns []string
+	if wa.Observation != "available" || wb.Observation != "available" {
+		warns = append(warns, fmt.Sprintf("WHEA observation not available on both sides (%s vs %s): hardware-error counts are not comparable",
+			wa.Observation, wb.Observation))
+	}
+	if wa.Uncorrected != wb.Uncorrected {
+		warns = append(warns, fmt.Sprintf("uncorrected WHEA records differ (%d vs %d): hardware evidence differs independently of core faults",
+			wa.Uncorrected, wb.Uncorrected))
+	}
+	return warns
 }
 
 // comparabilityWarnings checks the axes the plan demands before a
